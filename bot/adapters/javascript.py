@@ -15,9 +15,12 @@ _HTTP_METHODS = {"get", "post", "put", "patch", "delete", "head", "options"}
 _WRAPPERS = ("memo", "forwardRef", "useCallback", "observer")
 
 # at loadRoom (https://host/assets/index-a1b2.js:1:48211) / at https://host/x.js:1:2
-_FRAME = re.compile(r"^\s*at\s+(?:async\s+)?(?:(?P<fn>[^\s(]+)\s+\()?(?P<file>[^\s()]+?):(?P<line>\d+):(?P<col>\d+)\)?\s*$", re.M)
+# 사람이 붙여 넣은 글은 줄이 합쳐져 있기도 해서 줄 시작·끝에 묶지 않는다
+_FRAME = re.compile(r"(?:^|\s)at\s+(?:async\s+)?(?:(?P<fn>[^\s(]+)\s+\()?(?P<file>[^\s()]+?):(?P<line>\d+):(?P<col>\d+)\)?")
 # Firefox/Safari: loadRoom@https://host/x.js:1:2
-_FRAME_FF = re.compile(r"^\s*(?P<fn>[^\s@]*)@(?P<file>\S+?):(?P<line>\d+):(?P<col>\d+)\s*$", re.M)
+_FRAME_FF = re.compile(r"(?:^|\s)(?P<fn>[^\s@]*)@(?P<file>\S+?):(?P<line>\d+):(?P<col>\d+)")
+# "at" 없이 위치만 적힌 경우: index-a1b2.js:1:48211
+_FRAME_BARE = re.compile(r"(?P<fn>)(?P<file>[^\s()'\"]+\.(?:js|jsx|mjs)):(?P<line>\d+):(?P<col>\d+)")
 
 
 def _t(node: Node | None) -> str:
@@ -70,7 +73,7 @@ class JavaScriptAdapter(LanguageAdapter):
     def parse_stack_trace(self, text: str, base_packages: list[str] | None = None) -> list[Frame]:
         frames: list[Frame] = []
         seen: set[tuple] = set()
-        for pattern in (_FRAME, _FRAME_FF):
+        for pattern in (_FRAME, _FRAME_FF, _FRAME_BARE):
             for m in pattern.finditer(text):
                 file = m.group("file")
                 if "node_modules" in file or file.startswith("node:"):

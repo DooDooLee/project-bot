@@ -209,3 +209,15 @@ def test_java_stack_trace_with_log_prefix():
     )
     frames = JavaAdapter().parse_stack_trace(text, ["com.sudaduck.aichat"])
     assert [(f.class_name, f.method, f.line) for f in frames] == [("com.sudaduck.aichat.AiChatApplication", "main", 15)]
+
+
+def test_js_stack_trace_pasted_on_one_line():
+    """사람이 붙여 넣은 글처럼 에러 문장과 위치가 한 줄에 있어도 읽는다."""
+    adapter = JavaScriptAdapter()
+    text = "화면이 하얘요. TypeError: Cannot read properties of undefined (reading 'map') at https://example.com/assets/index-DqNnrIdZ.js:42:126779"
+    frames = adapter.parse_stack_trace(text)
+    assert [(f.file, f.line, f.column) for f in frames] == [("https://example.com/assets/index-DqNnrIdZ.js", 42, 126779)]
+    # at 없이 위치만 적혀 있어도, 개발 서버 주소(포트 포함)여도 읽는다
+    assert [(f.file, f.line) for f in adapter.parse_stack_trace("index-a1b2.js:1:48211 에서 에러")] == [("index-a1b2.js", 1)]
+    dev = adapter.parse_stack_trace("    at loadRoom (http://localhost:5173/src/pages/RoomPage.jsx:57:12)")
+    assert [(f.symbol, f.file, f.line, f.column) for f in dev] == [("loadRoom", "http://localhost:5173/src/pages/RoomPage.jsx", 57, 12)]

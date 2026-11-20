@@ -145,6 +145,25 @@ def _verify(report: str, extracted: dict) -> dict:
     return out
 
 
+def _excerpt(content: str, start_line: int, focus_line: int | None, limit: int = 5000, around: int = 45) -> str:
+    """LLM에 넘길 코드. 짧으면 전부, 길면 에러가 난 줄 주변을 넘긴다 (앞부분만 자르면 정작 에러 줄이 빠질 수 있다)."""
+    if len(content) <= limit:
+        return content
+    lines = content.split("\n")
+    if focus_line is None or not (start_line <= focus_line < start_line + len(lines)):
+        return content[:limit]
+    at = focus_line - start_line
+    lo, hi = max(0, at - around), min(len(lines), at + around + 1)
+    out = []
+    if lo > 0:
+        out += lines[:6] + [f"    // ... ({lo - 6}줄 생략)"] if lo > 6 else lines[:lo]
+    for i in range(lo, hi):
+        out.append(lines[i] + (f"   // ← {focus_line}번째 줄 (에러 위치)" if i == at else ""))
+    if hi < len(lines):
+        out.append(f"    // ... (아래 {len(lines) - hi}줄 생략)")
+    return "\n".join(out)[: limit + 2000]
+
+
 def _path_candidates(conn, method: str | None, path: str) -> list[dict]:
     """/api/v1/rooms/17 처럼 값이 들어간 경로를 등록된 경로(/api/v1/rooms/{})와 맞춘다."""
     target = normalize_path(path).split("/")
@@ -192,6 +211,10 @@ def build_graph(ctx: Context):
                     entries = []
                 if entries:
                     break
+            # 브라우저에서 난 JS 에러는 서버 로그에 남지 않는다. 같은 시각의 관계없는 서버 에러가 섞이지 않게 한다
+            if ex.get("where") == "browser" and not ex.get("api_path"):
+                message = (ex.get("error_message") or "")[:40]
+                entries = [e for e in entries if message and message in e.line]
             # 신고된 API를 처리하는 메서드가 스택 트레이스에 있으면 그 로그가 우선
             handlers = []
             if ex.get("api_path"):
@@ -250,14 +273,14 @@ def build_graph(ctx: Context):
 
         with store.connect() as conn:
 
-            async def add(qualified_name: str, service: str | None, why: str) -> dict | None:
+            async def add(qualified_name: str, service: str | None, why: str, focus_line: int | None = None) -> dict | None:
                 nonlocal budget
                 if qualified_name in picked or budget <= 0:
                     return picked.get(qualified_name)
                 chunk = await code_cache.get(ctx.redis, conn, qualified_name, service)
                 if chunk is None or chunk["kind"] == "class" and why.startswith("호출"):
                     return None
-                chunk = {**chunk, "why": why, "content": chunk["content"][:5000]}
+                chunk = {**chunk, "why": why, "content": _excerpt(chunk["content"], chunk["start_line"], focus_line)}
                 picked[qualified_name] = chunk
                 budget -= len(chunk["content"])
                 return chunk
@@ -271,7 +294,7 @@ def build_graph(ctx: Context):
                     if row is None:
                         continue
                     frames_out.append({"service": svc.name, "symbol": row["name"], "file": row["file_path"], "line": frame.line})
-                    await add(row["qualified_name"], svc.name, f"스택 트레이스 {frame.file}:{frame.line}")
+                    await add(row["qualified_name"], svc.name, f"스택 트레이스 {frame.file}:{frame.line}", frame.line)
             # 2) 신고된 API 경로 → 처리 메서드
             if ex.get("api_path"):
                 for r in _path_candidates(conn, ex.get("api_method"), ex["api_path"])[:3]:
@@ -306,7 +329,7 @@ def build_graph(ctx: Context):
                             row = store.chunk_at(conn, pos.source, pos.line, svc.name)
                             if row is not None:
                                 frames_out.append({"service": svc.name, "symbol": row["name"], "file": row["file_path"], "line": pos.line})
-                                await add(row["qualified_name"], svc.name, f"소스맵: {frame.file.rsplit('/', 1)[-1]}:{frame.line}:{frame.column} → {pos.source}:{pos.line}")
+                                await add(row["qualified_name"], svc.name, f"소스맵: {frame.file.rsplit('/', 1)[-1]}:{frame.line}:{frame.column} → {pos.source}:{pos.line}", pos.line)
                                 continue
                         if not frame.method:
                             continue

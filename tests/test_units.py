@@ -264,3 +264,15 @@ def test_sourcemap_resolve_reads_map_file(tmp_path, monkeypatch):
     pos = sourcemap.resolve("https://example.com/assets/index-a1b2.js?v=3", 1, 48211)
     assert (pos.source, pos.line) == ("src/pages/RoomPage.jsx", 57)
     assert sourcemap.resolve("https://example.com/assets/other.js", 1, 1) is None
+
+
+def test_excerpt_keeps_error_line_in_long_code():
+    lines = [f"line{i}" for i in range(1, 401)]  # 100번째 줄에서 시작하는 400줄짜리 컴포넌트
+    content = "\n".join(lines) + "\n" + "x" * 6000
+    out = flow._excerpt(content, start_line=100, focus_line=350)
+    assert "line251   // ← 350번째 줄 (에러 위치)" in out  # 350 - 100 = 251번째 줄(0부터 250)
+    assert out.startswith("line1\n") and "줄 생략" in out
+    assert "line206" in out and "line296" in out and "line150" not in out
+    # 짧은 코드는 그대로, 줄 번호를 모르면 앞부분만
+    assert flow._excerpt("short", 1, 1) == "short"
+    assert flow._excerpt(content, 100, None) == content[:5000]
