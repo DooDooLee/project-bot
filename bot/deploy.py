@@ -47,6 +47,28 @@ async def reindex(ctx) -> dict:
     return summary
 
 
+async def store_sourcemaps(job: str | None, number) -> int:
+    """배포된 프론트의 소스맵을 Jenkins에서 받아 보관한다. 브라우저 에러 위치를 원래 파일·줄로 바꿀 때 쓴다."""
+    import io
+    import tarfile
+
+    from bot import sourcemap
+
+    data = await jenkins.download_artifact(job, number, "sourcemaps.tgz")
+    if not data:
+        return 0
+    target = sourcemap.maps_dir()
+    target.mkdir(parents=True, exist_ok=True)
+    count = 0
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
+        for member in tar.getmembers():
+            name = os.path.basename(member.name)
+            if member.isfile() and name.endswith(".map"):
+                (target / name).write_bytes(tar.extractfile(member).read())
+                count += 1
+    return count
+
+
 async def handle(ctx, payload: dict) -> None:
     channel = _channel()
     if not channel:
@@ -76,9 +98,11 @@ async def handle(ctx, payload: dict) -> None:
         await slack_client.post_message(channel, f"배포 성공 #{number}. 바뀐 코드를 다시 읽는 중…", thread_ts=thread)
         try:
             s = await reindex(ctx)
+            maps = await store_sourcemaps(payload.get("job"), number)
             await slack_client.post_message(
                 channel,
-                f"코드 갱신 완료 (커밋 `{s['commit']}`): 추가 {s['inserted']} / 변경 {s['updated']} / 삭제 {s['deleted']}, 설명 다시 생성 {s['described']}개",
+                f"코드 갱신 완료 (커밋 `{s['commit']}`): 추가 {s['inserted']} / 변경 {s['updated']} / 삭제 {s['deleted']}, "
+                f"설명 다시 생성 {s['described']}개, 소스맵 {maps}개 보관",
                 thread_ts=thread,
             )
         except Exception as e:

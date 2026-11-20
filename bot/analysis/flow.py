@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 
 from langgraph.graph import END, START, StateGraph
 
-from bot import code_cache, embedding, llm
+from bot import code_cache, embedding, llm, sourcemap
 from bot.adapters import get_adapter
 from bot.adapters.base import normalize_path
 from bot.config import ProjectConfig
@@ -270,6 +270,14 @@ def build_graph(ctx: Context):
             if ex.get("where") == "browser":
                 for svc in js_services:
                     for frame in get_adapter(svc.language).parse_stack_trace(state["report"])[:6]:
+                        # 압축된 위치(index-a1b2.js:1:48211)를 소스맵으로 원래 파일·줄로 바꾼다
+                        pos = sourcemap.resolve(frame.file, frame.line, frame.column or 1)
+                        if pos is not None:
+                            row = store.chunk_at(conn, pos.source, pos.line, svc.name)
+                            if row is not None:
+                                frames_out.append({"service": svc.name, "symbol": row["name"], "file": row["file_path"], "line": pos.line})
+                                await add(row["qualified_name"], svc.name, f"소스맵: {frame.file.rsplit('/', 1)[-1]}:{frame.line}:{frame.column} → {pos.source}:{pos.line}")
+                                continue
                         if not frame.method:
                             continue
                         rows = conn.execute(

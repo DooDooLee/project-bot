@@ -71,6 +71,16 @@ async def console_text(job: str | None = None, build_number: int | None = None) 
     return r.text
 
 
+async def download_artifact(job: str | None, build_number: int | str, name: str) -> bytes | None:
+    """빌드가 남긴 파일(예: 소스맵 묶음)을 내려받는다. 없으면 None."""
+    url, auth = _cfg()
+    if not url:
+        return None
+    async with httpx.AsyncClient(timeout=60, auth=auth) as client:
+        r = await client.get(f"{url}/job/{job or deploy_job()}/{build_number}/artifact/{name}")
+    return r.content if r.status_code == 200 else None
+
+
 async def build_log_text(job: str | None = None, build_number: int | None = None) -> str:
     try:
         return trim_build_log(await console_text(job, build_number))

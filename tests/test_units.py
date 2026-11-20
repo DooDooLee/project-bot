@@ -228,3 +228,39 @@ def test_build_log_masks_secrets():
     for secret in ("2d962a217a113272cf00fb9ffa0d2e2c", "abc.def.ghi", "supersecretvalue123", "sk-proj-abcdef"):
         assert secret not in out
     assert "BUILD FAILED in 3s" in out and "x-webhook-secret: ***" in out
+
+
+# ── 소스맵 ─────────────────────────────────────────────────
+from bot import sourcemap
+
+
+def test_decode_vlq():
+    assert sourcemap.decode_vlq("AAAA") == [0, 0, 0, 0]
+    assert sourcemap.decode_vlq("AACA") == [0, 0, 1, 0]
+    assert sourcemap.decode_vlq("D") == [-1]
+    assert sourcemap.decode_vlq("gB") == [16]  # 두 글자로 이어지는 값
+    assert sourcemap.decode_vlq("6rk2B") == [886973]  # 소스맵 명세의 예
+
+
+def test_sourcemap_lookup():
+    # 생성된 1번째 줄: 열 0 → a.js 1줄, 열 10 → a.js 3줄(이름 load), 열 25 → b.jsx 57줄
+    raw = {"version": 3, "sources": ["../../src/a.js", "../../src/pages/b.jsx"], "names": ["load"],
+           "mappings": "AAAA,UAEAA,eCsDA"}
+    sm = sourcemap.SourceMap(raw)
+    assert (sm.lookup(1, 1).source, sm.lookup(1, 1).line) == ("../../src/a.js", 1)
+    hit = sm.lookup(1, 15)  # 열 10~24 구간
+    assert (hit.source, hit.line, hit.name) == ("../../src/a.js", 3, "load")
+    far = sm.lookup(1, 48211)  # 마지막 구간 뒤쪽은 마지막 항목으로
+    assert (far.source, far.line) == ("../../src/pages/b.jsx", 57)
+    assert sm.lookup(2, 1) is None and sm.lookup(0, 1) is None
+
+
+def test_sourcemap_resolve_reads_map_file(tmp_path, monkeypatch):
+    import json
+
+    monkeypatch.setenv("SOURCEMAP_DIR", str(tmp_path))
+    (tmp_path / "index-a1b2.js.map").write_text(json.dumps(
+        {"version": 3, "sources": ["../../src/pages/RoomPage.jsx"], "names": [], "mappings": "AAwDA"}), encoding="utf-8")
+    pos = sourcemap.resolve("https://example.com/assets/index-a1b2.js?v=3", 1, 48211)
+    assert (pos.source, pos.line) == ("src/pages/RoomPage.jsx", 57)
+    assert sourcemap.resolve("https://example.com/assets/other.js", 1, 1) is None
