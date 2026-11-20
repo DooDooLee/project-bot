@@ -87,8 +87,11 @@ def incident_by_pr(conn, pr_url: str) -> dict | None:
     return conn.execute("SELECT * FROM incident WHERE pr_url = %s", (pr_url,)).fetchone()
 
 
-def similar_incidents(conn, embedding: list[float] | None, limit: int = 3, max_distance: float = 0.6) -> list[dict]:
-    """해결된 처리 기록 가운데 증상·원인이 비슷한 것을 찾는다. <=> 는 코사인 거리라 작을수록 가깝다."""
+def similar_incidents(conn, embedding: list[float] | None, limit: int = 3, max_distance: float = 0.3) -> list[dict]:
+    """해결된 처리 기록 가운데 증상·원인이 비슷한 것을 찾는다. <=> 는 코사인 거리라 작을수록 가깝다.
+
+    기준 0.3 은 실제 기록으로 정했다: 같은 장애를 다시 신고한 쌍은 거리 0.05, 서로 다른 장애 쌍은 0.41~0.65 였다.
+    """
     if embedding is None:
         return []
     return conn.execute(
