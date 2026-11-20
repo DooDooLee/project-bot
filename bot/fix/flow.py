@@ -133,7 +133,9 @@ def apply_edits(root: Path, fix: dict) -> list[str]:
             file.write_text(e["new_string"], encoding="utf-8")
         else:
             file.write_text(file.read_text(encoding="utf-8").replace(e["old_string"], e["new_string"], 1), encoding="utf-8")
-        changed.append(e["file_path"].lstrip("/"))
+        path = e["file_path"].lstrip("/")
+        if path not in changed:  # 한 파일을 여러 군데 고쳐도 한 번만 적는다
+            changed.append(path)
     return changed
 
 
@@ -287,7 +289,10 @@ async def run(ctx, job_id: int) -> None:
                     feedback(messages, tool_id, f"테스트가 수정 전 코드에서 컴파일되지 않음. 테스트를 고쳐 다시 제출.\n{before['log'][-5000:]}")
                     continue
                 test_ok = True
-                await say(f"시도 {attempt}: 수정 전 코드에서 테스트가 실패하는 것을 확인했습니다. (Jenkins #{before['number']})")
+                if outcome == "build_error":
+                    await say(f"시도 {attempt}: 수정 전 코드에서는 테스트가 컴파일되지 않습니다. 수정으로 새로 만드는 클래스를 테스트가 쓰기 때문이라 수정 전 실패로 인정합니다. (Jenkins #{before['number']})")
+                else:
+                    await say(f"시도 {attempt}: 수정 전 코드에서 테스트가 실패하는 것을 확인했습니다. (Jenkins #{before['number']})")
 
             # 2단계: 수정을 올려서 통과하는지 본다
             changed = apply_edits(root, fix)
