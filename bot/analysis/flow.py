@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 
 from langgraph.graph import END, START, StateGraph
 
-from bot import code_cache, embedding, llm, sourcemap
+from bot import code_cache, embedding, llm, search, sourcemap
 from bot.adapters import get_adapter
 from bot.adapters.base import normalize_path
 from bot.config import ProjectConfig
@@ -211,8 +211,9 @@ def build_graph(ctx: Context):
                     entries = []
                 if entries:
                     break
-            # 브라우저에서 난 JS 에러는 서버 로그에 남지 않는다. 같은 시각의 관계없는 서버 에러가 섞이지 않게 한다
-            if ex.get("where") == "browser" and not ex.get("api_path"):
+            # 서버 에러라는 단서(API 경로, 상태 코드)가 없는 신고에는 같은 시각의 관계없는 서버 에러를 섞지 않는다.
+            # 브라우저에서 난 JS 에러나 화면 문제는 서버 로그에 남지 않기 때문이다
+            if ex.get("where") != "server" and not ex.get("api_path"):
                 message = (ex.get("error_message") or "")[:40]
                 entries = [e for e in entries if message and message in e.line]
             # 신고된 API를 처리하는 메서드가 스택 트레이스에 있으면 그 로그가 우선
@@ -302,15 +303,16 @@ def build_graph(ctx: Context):
                     # 그 API를 부르는 프론트 함수
                     for caller in store.edges_to(conn, r["route"])[:2]:
                         await add(caller["caller"], caller["service"], f"{r['route']} 를 호출하는 프론트 코드")
-            # 2-0) 배포 후 브라우저 확인(E2E)이 실패했으면 화면 경로를 정하는 라우터 코드를 함께 본다
-            if "playwright" in state.get("build_log", "").lower():
+            # 2-0) 화면 쪽 문제(E2E 실패, 서버 단서가 없는 신고)면 "어느 주소가 어느 화면인지"를 정하는 라우터 코드를 함께 본다
+            screen_issue = ex.get("where") != "server" and not ex.get("api_path") and not state.get("build_log")
+            if "playwright" in state.get("build_log", "").lower() or screen_issue:
                 for svc in js_services:
                     rows = conn.execute(
                         "SELECT qualified_name FROM code_chunk WHERE service = %s AND content LIKE %s ORDER BY length(content) DESC LIMIT 2",
                         (svc.name, "%<Route %"),
                     ).fetchall()
                     for row in rows:
-                        await add(row["qualified_name"], svc.name, "E2E 실패라 화면 경로를 정하는 라우터 코드를 확인")
+                        await add(row["qualified_name"], svc.name, "화면 문제라 주소와 화면을 잇는 라우터 코드를 확인")
             # 2-1) 401·403 은 인증 설정이 원인일 수 있어 보안 설정 클래스를 함께 본다
             if ex.get("status") in (401, 403):
                 rows = conn.execute(
@@ -339,6 +341,11 @@ def build_graph(ctx: Context):
                         ).fetchall()
                         for row in rows:
                             await add(row["qualified_name"], svc.name, f"브라우저 스택의 함수 {frame.method}")
+            # 3-1) 스택 트레이스도 API 경로도 없으면, 증상 설명과 뜻이 가까운 코드를 검색해 시작점으로 삼는다
+            if not picked:
+                query = " ".join(filter(None, [ex.get("summary"), ex.get("error_message")]))
+                for row in await search.search_code(conn, query, limit=4):
+                    await add(row["qualified_name"], row["service"], "단서가 없어 증상과 뜻이 가까운 코드를 검색")
             # 4) 지금까지 찾은 코드가 호출하는 쪽 (콜 그래프를 따라 한두 단계)
             for qn in list(picked)[:6]:
                 for step in store.neighbors(conn, qn, "callees", depth=2, limit=12):
