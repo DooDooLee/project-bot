@@ -8,7 +8,12 @@
 	}
 
 	# Jenkins, GitHub 알림은 n8n이 받아서 API로 넘긴다
-	handle {
+	handle /webhook/* {
 		reverse_proxy n8n:5678
+	}
+
+	# 그 밖의 경로(n8n 관리 화면 포함)는 외부에 열지 않는다. 관리 화면은 SSH 터널로 접속한다
+	handle {
+		respond 404
 	}
 }
