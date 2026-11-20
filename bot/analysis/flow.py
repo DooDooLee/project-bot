@@ -279,6 +279,15 @@ def build_graph(ctx: Context):
                     # 그 API를 부르는 프론트 함수
                     for caller in store.edges_to(conn, r["route"])[:2]:
                         await add(caller["caller"], caller["service"], f"{r['route']} 를 호출하는 프론트 코드")
+            # 2-0) 배포 후 브라우저 확인(E2E)이 실패했으면 화면 경로를 정하는 라우터 코드를 함께 본다
+            if "playwright" in state.get("build_log", "").lower():
+                for svc in js_services:
+                    rows = conn.execute(
+                        "SELECT qualified_name FROM code_chunk WHERE service = %s AND content LIKE %s ORDER BY length(content) DESC LIMIT 2",
+                        (svc.name, "%<Route %"),
+                    ).fetchall()
+                    for row in rows:
+                        await add(row["qualified_name"], svc.name, "E2E 실패라 화면 경로를 정하는 라우터 코드를 확인")
             # 2-1) 401·403 은 인증 설정이 원인일 수 있어 보안 설정 클래스를 함께 본다
             if ex.get("status") in (401, 403):
                 rows = conn.execute(
