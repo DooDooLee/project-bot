@@ -276,3 +276,30 @@ def test_excerpt_keeps_error_line_in_long_code():
     # 짧은 코드는 그대로, 줄 번호를 모르면 앞부분만
     assert flow._excerpt("short", 1, 1) == "short"
     assert flow._excerpt(content, 100, None) == content[:5000]
+
+
+def test_outcome_rejects_runs_that_found_no_tests():
+    """테스트를 찾지 못해 실패한 실행을 '수정 전 실패'로 인정하면 안 된다."""
+    vitest = "RUN  v5.1.1 /src\n\nNo test files found, exiting with code 1\n\nfilter: frontend/src/App.test.jsx"
+    assert fix_flow.test_outcome({"result": "FAILURE", "log": vitest}) == "no_tests"
+    gradle = "> Task :test FAILED\nNo tests found for given includes: [a.SvcTest](--tests filter)"
+    assert fix_flow.test_outcome({"result": "FAILURE", "log": gradle}) == "no_tests"
+    real = " FAIL  src/App.test.jsx > App 라우팅 > 없는 주소\nTestingLibraryElementError: Unable to find an element\n Test Files  1 failed (1)"
+    assert fix_flow.test_outcome({"result": "FAILURE", "log": real}) == "test_failed"
+
+
+def test_missing_new_symbol_requires_name_in_log():
+    fix = _fix(edits=[
+        {"file_path": "backend/src/main/java/a/PurchaseException.java", "old_string": "", "new_string": "class PurchaseException {}"},
+        {"file_path": "backend/src/main/java/a/Svc.java", "old_string": "return null;", "new_string": "return 1;"},
+    ])
+    assert fix_flow.missing_new_symbol(fix, "SvcTest.java:5: error: cannot find symbol\n  symbol: class PurchaseException")
+    # 다른 이유로 빌드가 깨진 것은 인정하지 않는다
+    assert not fix_flow.missing_new_symbol(fix, "SvcTest.java:9: error: ';' expected")
+    # 새 파일이 없는 수정이면 빌드 실패는 언제나 테스트 쪽 문제다
+    assert not fix_flow.missing_new_symbol(_fix(), "error: cannot find symbol Whatever")
+
+
+def test_build_log_strips_color_codes():
+    out = jenkins.trim_build_log(" \x1b[32m✓\x1b[39m src/App.test.jsx \x1b[2m(1 test)\x1b[22m\n \x1b[1m\x1b[32m2 passed\x1b[39m\x1b[22m")
+    assert "\x1b" not in out and "✓ src/App.test.jsx (1 test)" in out and "2 passed" in out

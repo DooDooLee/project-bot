@@ -140,15 +140,31 @@ def apply_edits(root: Path, fix: dict) -> list[str]:
 
 
 def test_outcome(result: dict) -> str:
-    """passed | test_failed | build_error. 테스트가 실패한 것과 빌드가 깨진 것을 구분한다."""
+    """passed | test_failed | build_error | no_tests.
+
+    테스트가 실패한 것, 빌드가 깨진 것, 테스트를 아예 찾지 못한 것을 구분한다.
+    셋 다 Jenkins에서는 실패로 끝나지만, '버그를 재현했다'고 볼 수 있는 것은 test_failed 뿐이다.
+    """
     if result["result"] == "SUCCESS":
         return "passed"
     text = result["log"]
+    if re.search(r"No test files found|No tests found for given includes|no tests? (?:were )?(?:found|ran)", text, re.I):
+        return "no_tests"
     if re.search(r"compile\w*Java FAILED|compile\w*Kotlin FAILED|error: |Could not resolve|SyntaxError|Failed to resolve import|Transform failed", text):
         return "build_error"
-    if re.search(r"\bFAILED\b|There were failing tests|Tests? failed|AssertionError|✗|×", text):
+    if re.search(r"\bFAILED\b|\bFAIL\b|There were failing tests|\d+ failed|AssertionError|AssertionFailedError|TestingLibraryElementError|✗|×", text):
         return "test_failed"
     return "build_error"
+
+
+def missing_new_symbol(fix: dict, log_text: str) -> bool:
+    """수정 전 빌드 실패가 '수정으로 새로 만드는 파일이 아직 없어서'인지 로그로 확인한다.
+
+    새 파일의 이름(예: PurchaseException, NotFoundPage)이 실패 로그에 나와야 한다.
+    다른 이유로 빌드가 깨진 것을 재현 성공으로 잘못 인정하지 않기 위해서다.
+    """
+    names = [Path(e["file_path"]).stem for e in fix["edits"] if e["old_string"] == ""]
+    return any(name and name in log_text for name in names)
 
 
 def _read(root: Path, path: str, limit: int = 14000) -> str:
@@ -264,14 +280,18 @@ async def run(ctx, job_id: int) -> None:
                 feedback(messages, tool_id, f"제출이 거부됨: {e}")
                 continue
 
-            test_filter = fix["test_name"] if svc.language == "java" else fix["test_name"]
+            if svc.language == "java":
+                test_filter = fix["test_name"]
+            else:
+                # Vitest는 서비스 폴더 안에서 돌기 때문에, 저장소 기준 경로에서 서비스 폴더를 뗀 경로를 넘긴다
+                test_filter = fix["test_file_path"].lstrip("/").removeprefix(svc.path.rstrip("/") + "/")
             if not test_ok:
                 # 1단계: 테스트만 올려서 수정 전 코드에서 실패하는지 본다
                 tfile = root / fix["test_file_path"].lstrip("/")
                 tfile.parent.mkdir(parents=True, exist_ok=True)
                 tfile.write_text(fix["test_content"], encoding="utf-8")
                 # 수정으로 새로 만드는 클래스를 테스트가 쓰면, 수정 전에는 컴파일이 안 된다. 이 경우도 '수정 전 실패'로 본다
-                test_commit = await repo.commit_all(root, f"재현 테스트 추가: {fix['test_name'].rsplit('.', 1)[-1]}")
+                test_commit = await repo.commit_all(root, f"재현 테스트 추가: {Path(fix['test_file_path']).name}")
                 await repo.push(project, root, branch)
                 await say(f"시도 {attempt}: 재현 테스트를 올렸습니다. 수정 전 코드에서 실패하는지 Jenkins로 확인합니다.")
                 before = await jenkins.run_and_wait(jenkins.test_job(), {"REPO_URL": tests_repo, "BRANCH": branch, "SERVICE": svc.name, "TESTS": test_filter})
@@ -282,15 +302,20 @@ async def run(ctx, job_id: int) -> None:
                     await repo.git("reset", "-q", "--hard", "HEAD~1", cwd=root)
                     feedback(messages, tool_id, "테스트가 수정 전 코드에서도 통과함. 버그를 재현하지 못함. 수정 전에는 실패하는 테스트로 다시 제출.")
                     continue
-                new_files = any(e["old_string"] == "" for e in fix["edits"])
-                if outcome == "build_error" and not new_files:
+                if outcome == "no_tests":
+                    # 테스트가 실행되지도 않았다. 실패로 끝났어도 버그를 재현한 것이 아니다
+                    await say(f"시도 {attempt}: Jenkins가 테스트를 찾지 못했습니다. 재현으로 인정하지 않고 다시 요청합니다. (Jenkins #{before['number']})")
+                    await repo.git("reset", "-q", "--hard", "HEAD~1", cwd=root)
+                    feedback(messages, tool_id, f"테스트 실행기가 테스트를 찾지 못함. 테스트 파일 위치와 이름, test_name을 확인해 다시 제출.\n{before['log'][-3000:]}")
+                    continue
+                if outcome == "build_error" and not missing_new_symbol(fix, before["log"]):
                     await say(f"시도 {attempt}: 테스트가 컴파일되지 않아 다시 요청합니다. (Jenkins #{before['number']})")
                     await repo.git("reset", "-q", "--hard", "HEAD~1", cwd=root)
                     feedback(messages, tool_id, f"테스트가 수정 전 코드에서 컴파일되지 않음. 테스트를 고쳐 다시 제출.\n{before['log'][-5000:]}")
                     continue
                 test_ok = True
                 if outcome == "build_error":
-                    await say(f"시도 {attempt}: 수정 전 코드에서는 테스트가 컴파일되지 않습니다. 수정으로 새로 만드는 클래스를 테스트가 쓰기 때문이라 수정 전 실패로 인정합니다. (Jenkins #{before['number']})")
+                    await say(f"시도 {attempt}: 수정 전 코드에서는 테스트가 빌드되지 않습니다. 수정으로 새로 만드는 파일을 테스트가 쓰고, 실패 로그에 그 이름이 나오는 것을 확인해 수정 전 실패로 인정합니다. (Jenkins #{before['number']})")
                 else:
                     await say(f"시도 {attempt}: 수정 전 코드에서 테스트가 실패하는 것을 확인했습니다. (Jenkins #{before['number']})")
 

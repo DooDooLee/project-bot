@@ -10,6 +10,7 @@ import re
 
 import httpx
 
+_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")  # 터미널 색상 코드
 _SIGNAL = re.compile(r"ERROR|FAILED|FAILURE|BUILD FAILED|Exception|error:|✗|AssertionError|Tests run:.*Failures: [1-9]| FAILED$")
 
 
@@ -33,7 +34,7 @@ def test_job() -> str:
 
 def trim_build_log(text: str, tail: int = 60, context: int = 3, max_chars: int = 9000) -> str:
     """빌드 로그는 수천 줄이 될 수 있다. 끝부분과 실패 신호 주변 줄만 남긴다."""
-    lines = text.splitlines()
+    lines = _ANSI.sub("", text).splitlines()  # 색상 코드를 지운다
     keep: set[int] = set(range(max(0, len(lines) - tail), len(lines)))
     for i, line in enumerate(lines):
         if _SIGNAL.search(line):
