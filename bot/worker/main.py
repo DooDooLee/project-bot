@@ -21,6 +21,11 @@ def _thread(event: dict) -> str:
     return event.get("thread_ts") or event["ts"]
 
 
+def _short(text: str, limit: int = 140) -> str:
+    text = " ".join(str(text).split())
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
 async def on_mention(ctx, event: dict) -> None:
     """멘션을 받으면 스레드에 접수 메시지와 버튼 두 개를 올린다."""
     channel, thread = event["channel"], _thread(event)
@@ -113,7 +118,7 @@ def report_blocks(result: dict, state: dict, job_id: int) -> tuple[str, list]:
     if result["cause_type"] != "code" and result.get("action"):
         lines.append(f"*조치 방법*\n{result['action']}")
     if state.get("incidents"):
-        lines.append("*비슷한 과거 장애*\n" + "\n".join(f"• {i['created_at'][:10]} {i['symptom']} → {i.get('resolution') or i.get('cause')}" for i in state["incidents"]))
+        lines.append("*비슷한 과거 장애*\n" + "\n".join(f"• {i['created_at'][:10]} {i['symptom']} → {_short(i.get('resolution') or i.get('cause') or '-')}" for i in state["incidents"]))
     text = "\n".join(lines)
     blocks = [slack_client.section(text)]
     if result["cause_type"] == "code":

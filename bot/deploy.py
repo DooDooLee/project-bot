@@ -86,7 +86,11 @@ async def handle(ctx, payload: dict) -> None:
             await slack_client.post_message(channel, f"코드 갱신 실패: `{str(e)[:200]}`", thread_ts=thread)
         return
 
-    if status in ("FAILURE", "UNSTABLE", "ABORTED"):
+    if status == "ABORTED":  # 사람이 중단한 배포는 장애가 아니므로 분석하지 않는다
+        await slack_client.post_message(channel, f"배포 중단 #{number}", thread_ts=thread)
+        return
+
+    if status in ("FAILURE", "UNSTABLE"):
         stage = payload.get("stage") or "-"
         await slack_client.post_message(channel, f"배포 실패 #{number} (단계: {stage}). 원인 분석을 시작합니다.", thread_ts=thread)
         try:
