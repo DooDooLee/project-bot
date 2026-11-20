@@ -81,3 +81,16 @@ CREATE TABLE IF NOT EXISTS job (
     state         JSONB NOT NULL DEFAULT '{}',
     UNIQUE (slack_channel, slack_ts)
 );
+
+-- 문서 청크 (README, 포팅 매뉴얼). ## / ### 단위로 자르고, 제목 경로를 heading 에 담는다
+CREATE TABLE IF NOT EXISTS doc_chunk (
+    id         BIGSERIAL PRIMARY KEY,
+    path       TEXT NOT NULL,
+    heading    TEXT NOT NULL,
+    content    TEXT NOT NULL,
+    hash       TEXT NOT NULL,
+    embedding  VECTOR(1536),
+    search     TSVECTOR GENERATED ALWAYS AS (to_tsvector('simple', heading || ' ' || content)) STORED,
+    UNIQUE (path, heading)
+);
+CREATE INDEX IF NOT EXISTS doc_chunk_search_idx ON doc_chunk USING GIN (search);

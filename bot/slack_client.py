@@ -23,6 +23,16 @@ async def call(method: str, payload: dict) -> dict:
     return data
 
 
+async def call_get(method: str, params: dict) -> dict:
+    """조회용 API (conversations.replies 등)는 쿼리 문자열로 값을 받는다."""
+    async with httpx.AsyncClient(timeout=15) as client:
+        r = await client.get(f"{API}/{method}", params=params, headers={"Authorization": f"Bearer {_token()}"})
+    data = r.json()
+    if not data.get("ok"):
+        log.error("slack %s failed: %s", method, data.get("error"))
+    return data
+
+
 async def post_message(channel: str, text: str, thread_ts: str | None = None, blocks: list | None = None) -> dict:
     payload: dict = {"channel": channel, "text": text}
     if thread_ts:

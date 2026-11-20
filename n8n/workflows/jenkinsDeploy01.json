@@ -1,6 +1,6 @@
 {
-  "id": "slackEvents01",
-  "name": "1. Slack 이벤트 받기",
+  "id": "jenkinsDeploy01",
+  "name": "Jenkins 배포 알림 (시작, 성공, 실패)",
   "active": false,
   "settings": {
     "executionOrder": "v1"
@@ -8,26 +8,24 @@
   "pinData": {},
   "nodes": [
     {
-      "id": "slackEvents01-1",
-      "name": "Slack에서 받기",
+      "id": "jenkinsDeploy01-1",
+      "name": "알림 받기",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
       "position": [
         0,
         0
       ],
-      "webhookId": "slackEvents01-hook",
+      "webhookId": "jenkinsDeploy01-hook",
       "parameters": {
         "httpMethod": "POST",
-        "path": "slack/events",
+        "path": "jenkins",
         "responseMode": "responseNode",
-        "options": {
-          "rawBody": true
-        }
+        "options": {}
       }
     },
     {
-      "id": "slackEvents01-2",
+      "id": "jenkinsDeploy01-2",
       "name": "봇 API로 전달",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
@@ -38,29 +36,21 @@
       "onError": "continueRegularOutput",
       "parameters": {
         "method": "POST",
-        "url": "={{ $env.BOT_API_URL }}/slack/events",
+        "url": "={{ $env.BOT_API_URL }}/hooks/jenkins",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             {
-              "name": "x-slack-signature",
-              "value": "={{ $json.headers['x-slack-signature'] }}"
-            },
-            {
-              "name": "x-slack-request-timestamp",
-              "value": "={{ $json.headers['x-slack-request-timestamp'] }}"
-            },
-            {
-              "name": "content-type",
-              "value": "={{ $json.headers['content-type'] }}"
+              "name": "x-webhook-secret",
+              "value": "={{ $json.headers['x-webhook-secret'] }}"
             }
           ]
         },
         "sendBody": true,
-        "contentType": "binaryData",
-        "inputDataFieldName": "data",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
         "options": {
-          "timeout": 2500,
+          "timeout": 5000,
           "response": {
             "response": {
               "neverError": true
@@ -70,8 +60,8 @@
       }
     },
     {
-      "id": "slackEvents01-3",
-      "name": "Slack에 응답",
+      "id": "jenkinsDeploy01-3",
+      "name": "응답",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
       "position": [
@@ -86,7 +76,7 @@
     }
   ],
   "connections": {
-    "Slack에서 받기": {
+    "알림 받기": {
       "main": [
         [
           {
@@ -101,7 +91,7 @@
       "main": [
         [
           {
-            "node": "Slack에 응답",
+            "node": "응답",
             "type": "main",
             "index": 0
           }

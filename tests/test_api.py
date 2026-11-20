@@ -42,35 +42,66 @@ def test_url_verification_echoes_challenge():
     assert r.json() == {"challenge": "abc123"}
 
 
+class FakeQueue:
+    """대기열 대신 넣은 일을 기록만 한다."""
+
+    def __init__(self):
+        self.jobs = []
+
+    async def enqueue_job(self, name, *args):
+        self.jobs.append((name, args))
+
+
 def test_event_requires_valid_signature(monkeypatch):
     monkeypatch.setenv("SLACK_SIGNING_SECRET", SECRET)
-    sent = []
-
-    async def fake_post(channel, text, thread_ts=None, blocks=None):
-        sent.append((channel, thread_ts, blocks))
-        return {"ok": True}
-
-    monkeypatch.setattr("bot.slack_client.post_message", fake_post)
+    app.state.queue = q = FakeQueue()
     body = json.dumps({"type": "event_callback", "event": {"type": "app_mention", "channel": "C1", "ts": "1.2"}}).encode()
     assert client.post("/slack/events", content=body).status_code == 401
     assert client.post("/slack/events", content=body, headers=_headers(body, secret="wrong")).status_code == 401
-    assert sent == []  # 검증에 실패한 요청으로는 아무것도 하지 않는다
+    assert q.jobs == []  # 검증에 실패한 요청으로는 아무것도 하지 않는다
     assert client.post("/slack/events", content=body, headers=_headers(body)).status_code == 200
-    # 멘션을 받으면 그 스레드에 버튼 두 개를 올린다
-    assert len(sent) == 1 and sent[0][0] == "C1" and sent[0][1] == "1.2"
-    assert [e["action_id"] for e in sent[0][2][1]["elements"]] == ["analyze_error", "ask_question"]
+    # 멘션을 받으면 대기열에 넣고 바로 응답한다 (실제 처리는 워커가 한다)
+    assert [name for name, _ in q.jobs] == ["on_mention"]
+    assert q.jobs[0][1][0]["channel"] == "C1"
     # Slack이 같은 이벤트를 다시 보내면 무시한다
     retry = _headers(body) | {"x-slack-retry-num": "1"}
     assert client.post("/slack/events", content=body, headers=retry).status_code == 200
-    assert len(sent) == 1
+    assert len(q.jobs) == 1
+    # 봇 자신이 쓴 메시지의 멘션은 처리하지 않는다
+    own = json.dumps({"type": "event_callback", "event": {"type": "app_mention", "channel": "C1", "ts": "1.3", "bot_id": "B1"}}).encode()
+    assert client.post("/slack/events", content=own, headers=_headers(own)).status_code == 200
+    assert len(q.jobs) == 1
 
 
 def test_action_parses_form_payload(monkeypatch):
     monkeypatch.setenv("SLACK_SIGNING_SECRET", SECRET)
+    app.state.queue = q = FakeQueue()
     from urllib.parse import urlencode
 
     payload = {"type": "block_actions", "actions": [{"action_id": "analyze_error", "value": "1"}]}
     body = urlencode({"payload": json.dumps(payload)}).encode()
     headers = _headers(body) | {"content-type": "application/x-www-form-urlencoded"}
-    assert client.post("/slack/actions", content=body, headers=headers).status_code == 200
     assert client.post("/slack/actions", content=body).status_code == 401
+    assert client.post("/slack/actions", content=body, headers=headers).status_code == 200
+    assert q.jobs == [("on_action", (payload,))]
+
+
+def test_queue_down_returns_503(monkeypatch):
+    monkeypatch.setenv("SLACK_SIGNING_SECRET", SECRET)
+    app.state.queue = None
+    body = json.dumps({"type": "event_callback", "event": {"type": "app_mention", "channel": "C1", "ts": "9.9"}}).encode()
+    assert client.post("/slack/events", content=body, headers=_headers(body)).status_code == 503
+
+
+def test_internal_hooks_require_secret(monkeypatch):
+    app.state.queue = q = FakeQueue()
+    monkeypatch.setenv("WEBHOOK_SECRET", "s3cret")
+    assert client.post("/hooks/jenkins", json={"status": "FAILURE"}).status_code == 401
+    assert client.post("/hooks/jenkins", json={"status": "FAILURE"}, headers={"x-webhook-secret": "wrong"}).status_code == 401
+    assert client.post("/hooks/jenkins", json={"status": "FAILURE", "build_number": 7}, headers={"x-webhook-secret": "s3cret"}).status_code == 200
+    assert q.jobs == [("on_jenkins", ({"status": "FAILURE", "build_number": 7},))]
+    # merge된 PR만 처리한다
+    hdr = {"x-webhook-secret": "s3cret"}
+    client.post("/hooks/github", json={"action": "closed", "pull_request": {"merged": False, "html_url": "u"}}, headers=hdr)
+    client.post("/hooks/github", json={"action": "closed", "pull_request": {"merged": True, "html_url": "u", "head": {"ref": "bot/fix-1"}}}, headers=hdr)
+    assert q.jobs[-1] == ("on_pr_merged", ({"url": "u", "branch": "bot/fix-1"},)) and len(q.jobs) == 2

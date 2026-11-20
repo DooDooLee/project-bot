@@ -13,3 +13,4 @@ pytest-asyncio
 anthropic
 openai
 redis
+langgraph

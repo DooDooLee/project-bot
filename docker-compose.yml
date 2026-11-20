@@ -1,0 +1,114 @@
+# 봇 서버 구성. 사용: docker compose up -d --build
+# 값은 같은 폴더의 .env 에서 읽는다 (.env.example 참고).
+name: stack
+
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      - BOT_HOST=${BOT_HOST}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+  # Slack, Jenkins, GitHub에서 오는 요청을 받아 봇 API로 넘긴다
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:2.48.7
+    restart: unless-stopped
+    environment:
+      - N8N_HOST=${BOT_HOST}
+      - N8N_PROTOCOL=https
+      - N8N_PORT=5678
+      - WEBHOOK_URL=https://${BOT_HOST}/
+      - GENERIC_TIMEZONE=Asia/Seoul
+      - TZ=Asia/Seoul
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - N8N_DIAGNOSTICS_ENABLED=false
+      - BOT_API_URL=http://api:8000
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n/workflows:/files:ro
+
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=bot
+      - POSTGRES_DB=bot
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - TZ=Asia/Seoul
+    ports: ["127.0.0.1:5432:5432"]
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports: ["127.0.0.1:6379:6379"]
+
+  api:
+    build: .
+    image: project-bot
+    restart: unless-stopped
+    command: uvicorn bot.api.main:app --host 0.0.0.0 --port 8000
+    env_file: [.env]
+    environment: &bot_env
+      - DATABASE_URL=postgresql://bot:${POSTGRES_PASSWORD}@postgres:5432/bot
+      - REDIS_URL=redis://redis:6379/0
+      - LOKI_URL=http://loki:3100
+      - PROMETHEUS_URL=http://prometheus:9090
+      - PROJECT_CONFIG=/app/project.yml
+      - REPO_DIR=/data/repo
+      - TZ=Asia/Seoul
+    volumes:
+      - ./project.yml:/app/project.yml:ro
+      - repo_data:/data
+    depends_on: [postgres, redis]
+
+  # 대기열에서 일을 꺼내 분석과 수정을 실행한다
+  worker:
+    image: project-bot
+    restart: unless-stopped
+    command: arq bot.worker.main.WorkerSettings
+    env_file: [.env]
+    environment: *bot_env
+    volumes:
+      - ./project.yml:/app/project.yml:ro
+      - repo_data:/data
+    depends_on: [postgres, redis, api]
+
+  loki:
+    image: grafana/loki:3.4.2
+    restart: unless-stopped
+    command: -config.file=/etc/loki/local-config.yaml
+    ports: ["3100:3100"]  # 앱 서버의 수집기가 로그를 보내는 곳. 보안 그룹으로 앱 서버만 허용한다
+    volumes:
+      - loki_data:/loki
+
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+    extra_hosts:
+      - "app-server:${APP_SERVER_IP}"
+    ports: ["127.0.0.1:9090:9090"]
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prom_data:/prometheus
+
+volumes:
+  caddy_data:
+  caddy_config:
+  n8n_data:
+  pg_data:
+  repo_data:
+  loki_data:
+  prom_data:
