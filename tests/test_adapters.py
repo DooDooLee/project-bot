@@ -198,3 +198,14 @@ def test_frontend_links_to_backend(java, js):
     assert served["GET /api/v1/rooms/{}"].endswith("RoomController#getRoom(Long)")
     assert called["GET /api/v1/rooms/{}"] == "src/api/room.js#getRoom"
     assert set(called) & set(served) == {"GET /api/v1/rooms/{}", "POST /api/v1/rooms", "DELETE /api/v1/rooms/{}/leave"}
+
+
+def test_java_stack_trace_with_log_prefix():
+    """Jenkins 빌드 로그처럼 줄마다 시각이 붙어 있어도 스택 트레이스를 읽는다."""
+    text = (
+        "[2026-11-20T20:49:25.290Z] Caused by: java.lang.IllegalStateException: No compatible attachment provider is available\n"
+        "[2026-11-20T20:49:25.290Z] \tat reactor.tools.agent.ReactorDebugAgent.init(ReactorDebugAgent.java:56)\n"
+        "[2026-11-20T20:49:25.290Z] \tat com.sudaduck.aichat.AiChatApplication.main(AiChatApplication.java:15)\n"
+    )
+    frames = JavaAdapter().parse_stack_trace(text, ["com.sudaduck.aichat"])
+    assert [(f.class_name, f.method, f.line) for f in frames] == [("com.sudaduck.aichat.AiChatApplication", "main", 15)]

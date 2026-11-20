@@ -41,7 +41,8 @@ _SUPER = "@super"
 
 # at com.example.Foo$Bar.method(Foo.java:42)
 # 모듈 접두어(java.base/, app//)가 붙은 줄도 받는다
-_FRAME = re.compile(r"^\s*at\s+(?:[\w.@-]*/)*([\w.$]+)\.([\w$<>]+)\(([\w$.-]+\.(?:java|kt)):(\d+)\)", re.M)
+# 줄 앞에 시각 같은 접두어가 붙은 로그(Jenkins 빌드 로그 등)에서도 찾도록 줄 시작에 묶지 않는다
+_FRAME = re.compile(r"(?:^|\s)at\s+(?:[\w.@-]*/)*([\w.$]+)\.([\w$<>]+)\(([\w$.-]+\.(?:java|kt)):(\d+)\)", re.M)
 
 
 def _t(node: Node | None) -> str:
