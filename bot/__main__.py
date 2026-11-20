@@ -64,9 +64,50 @@ def cmd_docs(args: argparse.Namespace) -> None:
     print(f"문서 청크 {r['chunks']}개")
 
 
+def cmd_eval_search(args: argparse.Namespace) -> None:
+    """한국어 질문으로 정답 코드를 찾는 비율을 잰다. 키워드만, 벡터만, 둘을 합친 경우를 비교한다."""
+    import asyncio
+
+    import yaml
+
+    from bot import embedding, search
+    from bot.db import store
+
+    with open(args.file, encoding="utf-8") as f:
+        cases = yaml.safe_load(f)
+
+    async def run() -> None:
+        modes = {"keyword": (True, False), "vector": (False, True), "hybrid": (True, True)}
+        score = {m: {"hit": 0, "rr": 0.0} for m in modes}
+        misses = []
+        with store.connect() as conn:
+            for case in cases:
+                qvec = await embedding.embed(case["q"])
+                for mode, (use_kw, use_vec) in modes.items():
+                    rows = await search.search_code(conn, case["q"], limit=args.k, use_keyword=use_kw, use_vector=use_vec, qvec=qvec)
+                    rank = next((i for i, r in enumerate(rows, 1) if any(e in r["name"] or e in r["qualified_name"] for e in case["expect"])), 0)
+                    if rank:
+                        score[mode]["hit"] += 1
+                        score[mode]["rr"] += 1 / rank
+                    elif mode == "hybrid":
+                        misses.append((case["q"], [r["name"] for r in rows]))
+        n = len(cases)
+        print(f"질문 {n}개, 상위 {args.k}개 기준")
+        for mode in modes:
+            print(f"  {mode:8s} Recall@{args.k} = {score[mode]['hit'] / n:.2f} ({score[mode]['hit']}/{n})   MRR = {score[mode]['rr'] / n:.2f}")
+        for q, got in misses:
+            print(f"  못 찾음: {q} → {got}")
+
+    asyncio.run(run())
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="bot")
     sub = parser.add_subparsers(dest="command", required=True)
+    p = sub.add_parser("eval-search", help="코드 검색 정확도 측정 (Recall@k, MRR)")
+    p.add_argument("--file", required=True)
+    p.add_argument("-k", type=int, default=5)
+    p.set_defaults(func=cmd_eval_search)
     p = sub.add_parser("enrich", help="청크마다 한국어 설명과 벡터를 만든다 (없는 것만)")
     p.add_argument("--limit", type=int, default=None)
     p.set_defaults(func=cmd_enrich)

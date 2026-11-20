@@ -1,0 +1,61 @@
+# 코드 검색 평가. 한국어 질문마다 정답 청크(이름의 일부)를 적는다. 상위 5개 안에 하나라도 들어가면 맞힌 것으로 센다.
+- q: 닉네임 바꾸는 코드 어디야
+  expect: [NicknameService#updateNickname, NicknameController#updateNickname]
+- q: 상점에서 아이템 구매 처리하는 곳
+  expect: [CustomPurchaseService#purchase, CustomPurchaseController#purchase]
+- q: 상점 아이템 목록 조회
+  expect: [CustomShopService#getShopItems, CustomShopController#getCustomItems]
+- q: 방 만들기 API
+  expect: [RoomController#createRoom]
+- q: 방 코드로 입장하는 로직
+  expect: [RoomController#joinRoom, "#joinRoom"]
+- q: 방 나가기 처리
+  expect: [RoomController#leaveRoom, "#leaveRoom"]
+- q: 방을 끝낼 때 Redis 정리하는 코드
+  expect: [RoomEndService#endRoom]
+- q: 복습 게임 문제 가져오는 코드
+  expect: [MiniGameService#getReviewQuestions, MiniGameController#getQuestions]
+- q: 복습 게임 답 제출하고 채점
+  expect: [MiniGameService#submitReviewAnswers, MiniGameController#submitReview]
+- q: 미니게임 랭킹 계산
+  expect: [MiniGameService#getReviewRanking, MiniGameService#convertToRankingList]
+- q: 코인 보상 지급
+  expect: [MiniGameService#rewardCoins]
+- q: 발음 평가 점수 받아오는 부분
+  expect: [AzureSpeechService#getPronunciationScore, SpeechController#assessPronunciation]
+- q: 텍스트를 음성으로 바꾸는 코드
+  expect: [AzureSpeechService#generateTTS]
+- q: 욕설 필터링
+  expect: [AiProfanityFilterService#containsProfanity, AiProfanityFilterService#validateText, ContentFilter#filter]
+- q: GPT 호출해서 스크립트 만드는 코드
+  expect: [GptService#generateScript, GptService#callGptRaw]
+- q: 번역 API
+  expect: [GptController#translate]
+- q: 영어 퀴즈 만드는 로직
+  expect: [EnglishQuizEventService#generateQuiz, EnglishQuizEventService#buildQuizPrompt]
+- q: 퀴즈 정답 채점
+  expect: [EnglishQuizEventService#evaluateAnswer, EnglishQuizEventService#submitAnswer]
+- q: 카카오 로그인 후 사용자 저장
+  expect: [CustomOAuth2UserService#saveOrUpdateUser, CustomOAuth2UserService#loadUser]
+- q: 액세스 토큰 재발급
+  expect: [AuthService#refresh, AuthController#refresh]
+- q: JWT 토큰 검증하는 필터
+  expect: [JwtAuthenticationFilter#doFilterInternal, JwtTokenProvider#validateToken]
+- q: 마이페이지 요약 정보
+  expect: [ProfileService#getMyPageSummary, MyPageController#getSummary]
+- q: 오리 캐릭터 꾸미기 장착
+  expect: [ProfileCustomizeService#equipDuck, ProfileCustomizeController#equipDuck]
+- q: AI 채팅 답변을 스트리밍으로 보내는 코드
+  expect: [ChatService#streamAssistant, ChatService#reply, AiChatService#streamReply, AiChatService#stream]
+- q: 쉐도잉 문장 생성
+  expect: [ShadowingService#generate, AiChatService#generateShadowing, AiShadowingService#generateOne]
+- q: AI 채팅 세션 만들기
+  expect: [AiChatSessionService#createSession, ChatService#start, ChatController#start]
+- q: OpenVidu 세션 연결 토큰 발급
+  expect: [OpenViduController#createConnection, RoomWebRtcController#issueToken, OpenViduClient#createConnection]
+- q: 프론트에서 로그인 요청 보내는 함수
+  expect: ["auth.js#login", "auth.js#loginWithKakao"]
+- q: 프론트 AI 채팅 메시지 스트리밍 받는 함수
+  expect: ["aiChat.js#streamMessage", "aiChat.js#streamSse"]
+- q: 녹음한 webm을 wav로 변환
+  expect: ["audioConverter.js#convertWebMToWav"]
