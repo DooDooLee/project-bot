@@ -18,6 +18,12 @@ def work_root() -> Path:
     return Path(os.environ.get("WORK_DIR", "/data/work"))
 
 
+def fetch_url(project: ProjectConfig) -> str:
+    """코드를 받아 오고 수정 브랜치를 올리는 저장소. 기본은 프로젝트의 GitHub 저장소이고,
+    REPO_FETCH_URL 을 주면 그 주소(예: 사내 미러)를 쓴다."""
+    return os.environ.get("REPO_FETCH_URL") or project.repo_url
+
+
 def _auth_url(url: str) -> str:
     """push가 필요할 때만 토큰을 넣은 주소를 쓴다. 토큰은 환경 변수에서만 읽는다."""
     token = os.environ.get("GITHUB_TOKEN", "")
@@ -46,9 +52,10 @@ async def sync(project: ProjectConfig) -> tuple[str, str]:
     path = repo_dir()
     if not (path / ".git").exists():
         path.parent.mkdir(parents=True, exist_ok=True)
-        await git("clone", "--branch", project.branch, project.repo_url, str(path))
+        await git("clone", "--branch", project.branch, fetch_url(project), str(path))
         return "", await git("rev-parse", "HEAD", cwd=path)
     before = await git("rev-parse", "HEAD", cwd=path)
+    await git("remote", "set-url", "origin", fetch_url(project), cwd=path)
     await git("fetch", "--prune", "origin", cwd=path)
     await git("checkout", "-q", project.branch, cwd=path)
     await git("reset", "-q", "--hard", f"origin/{project.branch}", cwd=path)
@@ -83,7 +90,11 @@ async def commit_all(path: Path, message: str) -> str:
 
 
 async def push(project: ProjectConfig, path: Path, branch: str) -> None:
-    await git("push", "-q", "--force", _auth_url(project.repo_url), f"HEAD:refs/heads/{branch}", cwd=path)
+    await push_to(fetch_url(project), path, branch)
+
+
+async def push_to(url: str, path: Path, branch: str) -> None:
+    await git("push", "-q", "--force", _auth_url(url), f"HEAD:refs/heads/{branch}", cwd=path)
 
 
 async def remove_worktree(path: Path) -> None:

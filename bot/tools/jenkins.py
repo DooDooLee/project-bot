@@ -72,7 +72,12 @@ async def run_and_wait(job: str, params: dict, timeout: int = 60 * 25, poll: flo
     if not url:
         raise RuntimeError("Jenkins가 연결되어 있지 않음 (JENKINS_URL)")
     async with httpx.AsyncClient(timeout=30, auth=auth) as client:
-        r = await client.post(f"{url}/job/{job}/buildWithParameters", params=params)
+        # 비밀번호로 인증할 때는 CSRF 토큰(crumb)을 먼저 받아 함께 보내야 한다
+        headers = {}
+        crumb = await client.get(f"{url}/crumbIssuer/api/json")
+        if crumb.status_code == 200:
+            headers[crumb.json()["crumbRequestField"]] = crumb.json()["crumb"]
+        r = await client.post(f"{url}/job/{job}/buildWithParameters", params=params, headers=headers)
         r.raise_for_status()
         queue_url = r.headers.get("location", "").rstrip("/")
         # 내부 주소로 바꿔서 대기열 항목을 따라간다

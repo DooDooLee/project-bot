@@ -124,3 +124,93 @@ def test_split_markdown_keeps_heading_trail():
     headings = [c["heading"] for c in chunks]
     assert headings == ["매뉴얼", "매뉴얼 > 3. 인프라 > 3.2. 포트", "매뉴얼 > 3. 인프라 > 3.3. DB", "매뉴얼 > 4. CI"]
     assert "# 주석은 제목이 아님" in chunks[1]["content"]
+
+
+# ── AI 수정: 제출 검증 ─────────────────────────────────────
+import pytest
+
+from bot.config import ProjectConfig, ServiceConfig
+from bot.fix import flow as fix_flow
+
+PROJECT = ProjectConfig(
+    project="demo", repo_url="https://github.com/o/r", branch="main",
+    services=[
+        ServiceConfig(name="backend", path="backend", language="java", source_dirs=["src/main/java"]),
+        ServiceConfig(name="frontend", path="frontend", language="javascript", source_dirs=["src"]),
+    ],
+)
+
+
+def _fix(**over):
+    base = {
+        "explanation": "x",
+        "edits": [{"file_path": "backend/src/main/java/a/Svc.java", "old_string": "return null;", "new_string": "return 1;"}],
+        "test_file_path": "backend/src/test/java/a/SvcTest.java",
+        "test_content": "class SvcTest {}",
+        "test_name": "a.SvcTest",
+        "commit_message": "고침",
+    }
+    return {**base, **over}
+
+
+@pytest.fixture
+def tree(tmp_path):
+    f = tmp_path / "backend/src/main/java/a/Svc.java"
+    f.parent.mkdir(parents=True)
+    f.write_text("class Svc { Object f() { return null; } Object g() { return 0; } }", encoding="utf-8")
+    (tmp_path / "Jenkinsfile").write_text("pipeline {}", encoding="utf-8")
+    return tmp_path
+
+
+def test_fix_validate_accepts_and_applies(tree):
+    fix = _fix()
+    assert fix_flow.validate(PROJECT, tree, fix).name == "backend"
+    assert fix_flow.apply_edits(tree, fix) == ["backend/src/main/java/a/Svc.java"]
+    assert "return 1;" in (tree / "backend/src/main/java/a/Svc.java").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "over,reason",
+    [
+        ({"edits": [{"file_path": "Jenkinsfile", "old_string": "pipeline", "new_string": "x"}]}, "서비스 폴더 밖"),
+        ({"edits": [{"file_path": "backend/build.gradle", "old_string": "a", "new_string": "b"}]}, "소스 폴더"),
+        ({"edits": [{"file_path": "backend/src/main/java/a/../../../../x.java", "old_string": "", "new_string": "b"}]}, "서비스 폴더 밖"),
+        ({"edits": [{"file_path": "backend/src/main/java/a/Svc.java", "old_string": "return", "new_string": "x"}]}, "2번"),
+        ({"edits": [{"file_path": "backend/src/main/java/a/Svc.java", "old_string": "없는 글", "new_string": "x"}]}, "0번"),
+        ({"edits": [{"file_path": "backend/src/main/java/a/Svc.java", "old_string": "", "new_string": "x"}]}, "이미 있는 파일"),
+        ({"edits": []}, "비어"),
+        ({"test_file_path": "backend/src/main/java/a/SvcTest.java"}, "src/test"),
+        ({"test_file_path": "backend/src/test/java/a/SvcTests.java"}, "Test.java"),
+        ({"test_content": "@SpringBootTest class SvcTest {}"}, "SpringBootTest"),
+        ({"test_content": "class SvcTest { String q = \"DELETE FROM users\"; }"}, "DELETE"),
+        ({"test_content": "jdbc.execute(\"drop table room\")"}, "DROP"),
+    ],
+)
+def test_fix_validate_rejects(tree, over, reason):
+    with pytest.raises(fix_flow.Rejected) as e:
+        fix_flow.validate(PROJECT, tree, _fix(**over))
+    assert reason in str(e.value)
+
+
+def test_fix_new_file_and_frontend_test_rules(tree):
+    fix = _fix(edits=[{"file_path": "backend/src/main/java/a/New.java", "old_string": "", "new_string": "class New {}"}])
+    fix_flow.validate(PROJECT, tree, fix)
+    fix_flow.apply_edits(tree, fix)
+    assert (tree / "backend/src/main/java/a/New.java").read_text(encoding="utf-8") == "class New {}"
+    page = tree / "frontend/src/pages/P.jsx"
+    page.parent.mkdir(parents=True)
+    page.write_text("export default function P() { return null; }", encoding="utf-8")
+    js = _fix(edits=[{"file_path": "frontend/src/pages/P.jsx", "old_string": "return null;", "new_string": "return 1;"}],
+              test_file_path="frontend/src/pages/P.test.jsx", test_name="src/pages/P.test.jsx")
+    assert fix_flow.validate(PROJECT, tree, js).name == "frontend"
+    with pytest.raises(fix_flow.Rejected):
+        fix_flow.validate(PROJECT, tree, {**js, "test_file_path": "frontend/src/pages/P.spec.ts"})
+
+
+def test_test_outcome_distinguishes_failure_from_build_error():
+    assert fix_flow.test_outcome({"result": "SUCCESS", "log": "BUILD SUCCESSFUL"}) == "passed"
+    failed = "SvcTest > 없는_아이템이면_404() FAILED\n    org.opentest4j.AssertionFailedError\n> Task :test FAILED\nThere were failing tests."
+    assert fix_flow.test_outcome({"result": "FAILURE", "log": failed}) == "test_failed"
+    broken = "> Task :compileTestJava FAILED\nSvcTest.java:12: error: cannot find symbol"
+    assert fix_flow.test_outcome({"result": "FAILURE", "log": broken}) == "build_error"
+    assert fix_flow.test_outcome({"result": "FAILURE", "log": "docker: no such image"}) == "build_error"
