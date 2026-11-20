@@ -214,3 +214,17 @@ def test_test_outcome_distinguishes_failure_from_build_error():
     broken = "> Task :compileTestJava FAILED\nSvcTest.java:12: error: cannot find symbol"
     assert fix_flow.test_outcome({"result": "FAILURE", "log": broken}) == "build_error"
     assert fix_flow.test_outcome({"result": "FAILURE", "log": "docker: no such image"}) == "build_error"
+
+
+def test_build_log_masks_secrets():
+    text = "\n".join([
+        '+ curl -s -H "x-webhook-secret: 2d962a217a113272cf00fb9ffa0d2e2c" https://bot/webhook/jenkins',
+        "Authorization: Bearer abc.def.ghi",
+        "DB_ROOT_PASSWORD=supersecretvalue123",
+        "using key sk-proj-abcdefghijklmnopqrstuvwxyz0123",
+        "BUILD FAILED in 3s",
+    ])
+    out = jenkins.trim_build_log(text)
+    for secret in ("2d962a217a113272cf00fb9ffa0d2e2c", "abc.def.ghi", "supersecretvalue123", "sk-proj-abcdef"):
+        assert secret not in out
+    assert "BUILD FAILED in 3s" in out and "x-webhook-secret: ***" in out

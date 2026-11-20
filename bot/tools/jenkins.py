@@ -44,8 +44,20 @@ def trim_build_log(text: str, tail: int = 60, context: int = 3, max_chars: int =
             out.append(f"... ({i - prev - 1}줄 생략)")
         out.append(lines[i])
         prev = i
-    result = "\n".join(out)
+    result = mask("\n".join(out))
     return result[-max_chars:] if len(result) > max_chars else result
+
+
+_HEADER_SECRET = re.compile(r"(?i)(x-webhook-secret:\s*|authorization:\s*(?:bearer|basic)\s+)\S+")
+_ASSIGNED_SECRET = re.compile(r"(?i)\b([\w-]*(?:password|passwd|secret|token|api[-_]?key)[\w-]*\s*[=:]\s*)[^\s\"']{6,}")
+_KEY_LIKE = re.compile(r"\b(?:sk-[A-Za-z0-9_-]{16,}|xox[abp]-[A-Za-z0-9-]{10,}|gh[pousr]_[A-Za-z0-9]{20,})\b")
+
+
+def mask(text: str) -> str:
+    """빌드 로그에 섞여 나올 수 있는 비밀값을 가린다. 이 글은 LLM과 Slack으로 나간다."""
+    text = _HEADER_SECRET.sub(r"\1***", text)
+    text = _ASSIGNED_SECRET.sub(r"\1***", text)
+    return _KEY_LIKE.sub("***", text)
 
 
 async def console_text(job: str | None = None, build_number: int | None = None) -> str:
