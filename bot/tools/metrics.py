@@ -9,6 +9,7 @@ import httpx
 # 이름 → (설명, PromQL, 단위)
 TEMPLATES: dict[str, tuple[str, str, str]] = {
     "cpu": ("서버 CPU 사용률", '100 - avg(rate(node_cpu_seconds_total{mode="idle"}[2m])) * 100', "%"),
+    "cpu_steal": ("CPU steal (클라우드가 이 서버의 CPU를 제한한 비율)", 'avg(rate(node_cpu_seconds_total{mode="steal"}[2m])) * 100', "%"),
     "memory": ("서버 메모리 사용률", "(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100", "%"),
     "disk": ("디스크 사용률 (/)", '(1 - node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100', "%"),
     "http_requests": ("서비스별 초당 요청 수", "sum by (service) (rate(http_server_requests_seconds_count[2m]))", "req/s"),

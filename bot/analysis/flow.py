@@ -20,7 +20,7 @@ from bot.adapters import get_adapter
 from bot.adapters.base import normalize_path
 from bot.config import ProjectConfig
 from bot.db import jobs, store
-from bot.tools import logs
+from bot.tools import logs, metrics
 
 log = logging.getLogger("bot.analysis")
 KST = ZoneInfo("Asia/Seoul")
@@ -50,6 +50,7 @@ class State(TypedDict, total=False):
     code: list[dict]
     incidents: list[dict]
     hints: list[str]
+    metrics: list[str]  # 신고 시각 직전의 서버 지표
     result: dict
 
 
@@ -218,7 +219,27 @@ def build_graph(ctx: Context):
                     break
             text_for_hints += "\n" + "\n".join(f["line"] for f in found)
         hints = [f"{note} (자동 감지, 유형 후보: {CAUSE_TYPES[kind]})" for pattern, kind, note in _PATTERNS if re.search(pattern, text_for_hints)]
-        return {"logs": found, "hints": hints}
+        # 에러 시각의 서버 상태도 본다. 코드가 아니라 서버 자원이 원인인 경우를 구분하기 위해서다
+        snapshot: list[str] = []
+        checks = (
+            ("cpu_steal", 20, "CPU steal이 높음. 클라우드가 CPU를 제한하고 있어 모든 처리가 느려짐"),
+            ("memory", 90, "메모리 사용률이 높음"),
+            ("disk", 90, "디스크 사용률이 높음"),
+            ("cpu", 101, ""),
+        )
+        for name, limit, note in checks:
+            try:
+                m = await metrics.query_metric(name, 15, state["now_ns"] / NS)
+            except Exception as e:
+                log.warning("지표 조회 실패(%s): %s", name, e)
+                continue
+            if not m["series"]:
+                continue
+            top = m["series"][0]
+            snapshot.append(f"{m['title']}: 평균 {top['avg']}{m['unit']}, 최대 {top['max']}{m['unit']}")
+            if note and top["max"] >= limit:
+                hints.append(f"{note} (최대 {top['max']}{m['unit']}, 자동 감지, 유형 후보: 인프라)")
+        return {"logs": found, "hints": hints, "metrics": snapshot}
 
     async def find_code(state: State) -> dict:
         await ctx.progress("스택 트레이스의 메서드와 콜 그래프로 관련 코드를 찾는 중")
@@ -312,6 +333,8 @@ def build_graph(ctx: Context):
             parts.append(f"## Jenkins 빌드 로그 (실패 주변)\n{state['build_log'][:9000]}")
         if state.get("hints"):
             parts.append("## 자동 감지된 패턴\n" + "\n".join(f"- {h}" for h in state["hints"]))
+        if state.get("metrics"):
+            parts.append("## 서버 지표 (신고 직전 15분, Prometheus)\n" + "\n".join(f"- {m}" for m in state["metrics"]))
         if state.get("logs"):
             parts.append("## 서버 에러 로그 (Loki)\n" + "\n\n".join(f"[{e['service']} {e['time']}]\n{logs.trim(e['line'])}" for e in state["logs"]))
         else:
