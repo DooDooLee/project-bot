@@ -1,0 +1,27 @@
+# Slack 앱 설정. https://api.slack.com/apps → Create New App → From a manifest 에 붙여 넣는다.
+# <봇 서버 주소>를 n8n이 떠 있는 HTTPS 주소로 바꾼다.
+display_information:
+  name: 프로젝트 봇
+  description: 에러를 붙여 넣으면 원인을 분석하고 수정 PR을 올리는 봇
+features:
+  bot_user:
+    display_name: project-bot
+    always_online: true
+oauth_config:
+  scopes:
+    bot:
+      - app_mentions:read
+      - chat:write
+      - channels:history
+      - groups:history
+settings:
+  event_subscriptions:
+    request_url: https://<봇 서버 주소>/webhook/slack/events
+    bot_events:
+      - app_mention
+  interactivity:
+    is_enabled: true
+    request_url: https://<봇 서버 주소>/webhook/slack/actions
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false

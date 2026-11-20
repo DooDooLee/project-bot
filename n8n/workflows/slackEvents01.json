@@ -1,0 +1,112 @@
+{
+  "id": "slackEvents01",
+  "name": "1. Slack 이벤트 받기",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "nodes": [
+    {
+      "id": "slackEvents01-1",
+      "name": "Slack에서 받기",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "slackEvents01-hook",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "slack/events",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      }
+    },
+    {
+      "id": "slackEvents01-2",
+      "name": "봇 API로 전달",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        260,
+        0
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BOT_API_URL }}/slack/events",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-slack-signature",
+              "value": "={{ $json.headers['x-slack-signature'] }}"
+            },
+            {
+              "name": "x-slack-request-timestamp",
+              "value": "={{ $json.headers['x-slack-request-timestamp'] }}"
+            },
+            {
+              "name": "content-type",
+              "value": "={{ $json.headers['content-type'] }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "data",
+        "options": {
+          "timeout": 2500,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "slackEvents01-3",
+      "name": "Slack에 응답",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        520,
+        0
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Slack에서 받기": {
+      "main": [
+        [
+          {
+            "node": "봇 API로 전달",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "봇 API로 전달": {
+      "main": [
+        [
+          {
+            "node": "Slack에 응답",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

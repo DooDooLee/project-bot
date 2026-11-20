@@ -1,0 +1,28 @@
+# 수다덕(sudaDUCK)에 적용한 설정
+project: sudaduck
+repo:
+  url: https://github.com/DooDooLee/sudaDUCK
+  branch: develop
+services:
+  - name: backend
+    path: backend
+    language: java
+    source_dirs: [src/main/java]
+    base_packages: [com.example.DuckDuck]
+    test_command: ./gradlew test
+  - name: ai-chat
+    path: ai-chat
+    language: java
+    source_dirs: [src/main/java]
+    base_packages: [com.sudaduck.aichat]
+    test_command: ./gradlew test
+  - name: frontend
+    path: frontend
+    language: javascript
+    source_dirs: [src]
+    aliases: {"@": "src"}
+    exclude: ["*.test.js", "*.test.jsx"]
+    test_command: npm run test
+docs:
+  - README.md
+  - exec/포팅메뉴얼.md
