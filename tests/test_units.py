@@ -333,7 +333,7 @@ def test_report_message_shows_conclusion_first():
     assert blocks[0]["text"]["text"] == "🔴 라우터에 없는 주소를 받는 경로가 없음"
     # 이름과 값은 한 줄에 나란히 (스레드 창이 좁아도 떨어지지 않게)
     assert blocks[1]["text"]["text"].splitlines() == [
-        "*원인 종류*  코드", "*신뢰도*  높음", "*위치*  `App.jsx:86` AppContent", "*비슷한 과거 장애*  1건",
+        "*원인 종류:*  `코드`", "*신뢰도:*  `높음`", "*위치:*  `App.jsx:86` AppContent", "*비슷한 과거 장애:*  `1건`",
     ]
     # 원인은 짧은 항목으로, 따옴표 앞 역슬래시는 없앤다
     assert blocks[2]["text"]["text"] == '*원인*\n• <Routes>에 path="*" 라우트 없음\n• 없는 주소에서 아무것도 그리지 않음'
@@ -353,7 +353,7 @@ def test_report_message_for_non_code_cause():
               "steps": ["1. 크레딧 방식 확인", "사양 올리기"], "fix": None}
     _, blocks = slack_ui.report_message(result, {}, 3)
     assert blocks[0]["text"]["text"].startswith("🟠 ")
-    assert blocks[1]["text"]["text"] == "*원인 종류*  인프라\n*신뢰도*  보통"  # 위치와 과거 장애는 없으면 줄을 만들지 않는다
+    assert blocks[1]["text"]["text"] == "*원인 종류:*  `인프라`\n*신뢰도:*  `보통`"  # 위치와 과거 장애는 없으면 줄을 만들지 않는다
     todo = next(b["text"]["text"] for b in blocks if b["type"] == "section" and b["text"]["text"].startswith("*다음 할 일*"))
     assert todo == "*다음 할 일*\n1. 크레딧 방식 확인\n2. 사양 올리기"  # 번호가 이미 붙어 있어도 한 번만
     assert [e["action_id"] for e in blocks[-1]["elements"]] == ["mark_resolved", "show_evidence"]  # 걸린 시간이 없으면 작은 글씨 줄도 없다
@@ -376,7 +376,7 @@ def test_fix_result_message():
     assert [b["type"] for b in blocks] == ["header", "section", "section", "actions", "context"]
     assert blocks[0]["text"]["text"] == "🟢 수정 완료"
     assert blocks[1]["text"]["text"].splitlines() == [
-        "*검증*  수정 전 실패 #5 → 수정 후 통과 #6", "*바뀐 파일*  `NotFoundPage.jsx`, `App.jsx`", "*브랜치*  `bot/fix-14`",
+        "*검증:*  수정 전 실패 #5 → 수정 후 통과 #6", "*바뀐 파일:*  `NotFoundPage.jsx`, `App.jsx`", "*브랜치:*  `bot/fix-14`",
     ]
     assert blocks[2]["text"]["text"].startswith("*바꾼 내용*\nNotFoundPage")
     assert blocks[-1]["elements"][0]["text"] == "77초" and text == "수정 완료 (77초)"
@@ -384,7 +384,7 @@ def test_fix_result_message():
     _, with_pr = slack_ui.fix_result_message(14, {"explanation": "x"}, {**summary, "pr_url": "https://github.com/o/r/pull/1", "attempts": 2, "apis": ["GET /a"]})
     assert "actions" not in [b["type"] for b in with_pr]
     lines = with_pr[1]["text"]["text"].splitlines()
-    assert "*영향받는 API*  `GET /a`" in lines and "*PR*  https://github.com/o/r/pull/1" in lines and not any("브랜치" in line for line in lines)
+    assert "*영향받는 API:*  `GET /a`" in lines and "*PR:*  https://github.com/o/r/pull/1" in lines and not any("브랜치" in line for line in lines)
     assert with_pr[-1]["elements"][0]["text"] == "77초  ·  2번째 시도에 통과"
 
 

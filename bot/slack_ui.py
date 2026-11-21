@@ -120,8 +120,8 @@ class Progress:
 
 
 def pairs_text(*pairs: tuple[str, str]) -> str:
-    """이름과 값을 한 줄에 나란히. 스레드 창이 좁아도 이름과 값이 떨어지지 않는다."""
-    return "\n".join(f"*{k}*  {v}" for k, v in pairs if v)
+    """이름: 값 을 한 줄에 하나씩. 이름은 굵게 쓰고 콜론을 붙여, 값과 한 문장처럼 읽히지 않게 한다."""
+    return "\n".join(f"*{k}:*  {v}" for k, v in pairs if v)
 
 
 def location(result: dict) -> str:
@@ -142,10 +142,11 @@ def report_message(result: dict, state: dict, job_id: int, elapsed: float | None
 
     incidents = state.get("incidents") or []
     blocks.append(slack_client.section(pairs_text(
-        ("원인 종류", CAUSE_TYPES[kind]),
-        ("신뢰도", CONFIDENCE.get(result.get("confidence"), "-")),
+        # 값은 상자 글씨(`…`)로 써서 이름과 눈으로 구분되게 한다
+        ("원인 종류", f"`{CAUSE_TYPES[kind]}`"),
+        ("신뢰도", f"`{CONFIDENCE.get(result.get('confidence'), '-')}`"),
         ("위치", location(result)),
-        ("비슷한 과거 장애", f"{len(incidents)}건" if incidents else ""),
+        ("비슷한 과거 장애", f"`{len(incidents)}건`" if incidents else ""),
     )))
 
     points = result.get("points") or _sentences(result.get("cause"))[:3]
