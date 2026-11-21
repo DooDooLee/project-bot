@@ -290,7 +290,12 @@ async def answer(ctx, job_id: int, intent: str | None = None, question: str | No
         with store.connect() as conn:
             # 분석이 끝난 스레드에서 이어 물은 것이면 상태를 바꾸지 않는다 (AI 수정 버튼이 계속 눌려야 한다)
             status_after = "answered" if job["status"] in ("received", "answered") else None
-            jobs.update_job(conn, job_id, status_after, answer=text, tools_used=used, usage=usage.as_dict(), elapsed_seconds=elapsed)
+            record = {"answer": text, "tools_used": used, "usage": usage.as_dict(), "elapsed_seconds": elapsed}
+            if follow_up:
+                # 이어 묻는 질문의 기록은 따로 둔다. 분석 결과의 걸린 시간·토큰 수를 덮어쓰지 않는다
+                jobs.update_job(conn, job_id, status_after, last_answer={"question": question, **record})
+            else:
+                jobs.update_job(conn, job_id, status_after, **record)
         names = " · ".join(TOOL_LABELS.get(u, u) for u in dict.fromkeys(used)) or "도구 없이 답함"
         if status.get("ts"):
             # 진행 메시지는 지우고 답 하나만 남긴다

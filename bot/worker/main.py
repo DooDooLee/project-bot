@@ -30,6 +30,11 @@ def empty_mention_text(mention: str) -> str:
     )
 
 
+BUSY = ("analyzing", "fixing")  # 진행 중
+CLOSED = ("fixed", "resolved")  # 수정 브랜치나 해결 기록이 남은 상태
+REANALYZABLE = ("received", "analyzed", "failed", "answered", "fix_failed")
+
+
 def thread_history(messages: list[dict], current_ts: str, limit: int = 8, max_chars: int = 6000) -> str:
     """스레드에서 앞서 주고받은 글. 이어서 묻는 질문에 참고로 넘긴다."""
     lines = []
@@ -74,7 +79,14 @@ async def on_mention(ctx, event: dict) -> None:
         except Exception:
             log.exception("메시지 종류를 가리지 못함")
             intent = "question"
-        if intent == "error":
+        if intent == "error" and previous["status"] in BUSY:
+            await slack_client.post_message(channel, "이 스레드의 작업이 아직 진행 중입니다. 끝난 뒤에 다시 불러 주세요.", thread_ts=thread)
+        elif intent == "error" and previous["status"] in CLOSED:
+            # 수정 브랜치나 해결 기록이 있는 작업은 다시 분석하지 않는다 (앞서 만든 수정 브랜치를 덮어쓰지 않도록)
+            await slack_client.post_message(
+                channel, f"이 스레드는 이미 수정·해결로 끝났습니다. 새 증상이면 새 글에서 {mention} 을 불러 주세요.", thread_ts=thread,
+            )
+        elif intent == "error":
             # 추가 설명을 붙여 다시 분석한다
             report = f"{previous['state'].get('report', '')}\n\n[추가 설명]\n{text}".strip()
             with store.connect() as conn:
@@ -159,8 +171,8 @@ async def show_evidence(ctx, job_id: int) -> None:
 
 async def analyze_error(ctx, job_id: int, build_log: str = "") -> None:
     with store.connect() as conn:
-        # 분석 중이거나 AI가 고치는 중이 아니면 다시 분석할 수 있다
-        if not jobs.claim(conn, job_id, ("received", "analyzed", "failed", "answered", "fixed", "fix_failed", "resolved"), "analyzing"):
+        # 진행 중이거나 수정·해결로 끝난 작업은 다시 분석하지 않는다
+        if not jobs.claim(conn, job_id, REANALYZABLE, "analyzing"):
             return
         job = jobs.get_job(conn, job_id)
     channel, thread = job["slack_channel"], job["slack_ts"]

@@ -602,3 +602,55 @@ def test_follow_up_question_gets_context_but_is_asked_alone():
     text = qa.with_context("그 메서드는 어디서 불러?", "[봇] createOrder 가 받습니다.", {"symptom": "주문 500", "cause": "재고 확인 누락", "file_path": "a/OrderService.java", "line": 30, "symbol": "create"})
     assert text.index("앞서 주고받은 내용") < text.index("장애 분석 결과") < text.index("## 이번 질문\n그 메서드는 어디서 불러?")
     assert "위치: a/OrderService.java:30 create" in text and "이번 질문에만 답한다" in text
+
+
+@pytest.mark.parametrize("status,expected", [
+    ("fixed", "이미 수정·해결로 끝났습니다"), ("resolved", "이미 수정·해결로 끝났습니다"),
+    ("fixing", "아직 진행 중입니다"), ("analyzing", "아직 진행 중입니다"), ("analyzed", None),
+])
+def test_follow_up_error_does_not_reanalyze_closed_or_busy_thread(monkeypatch, status, expected):
+    """수정·해결로 끝났거나 진행 중인 스레드는 다시 분석하지 않는다 (앞서 만든 수정 브랜치를 덮어쓰지 않도록)."""
+    import asyncio
+    from contextlib import contextmanager
+
+    from bot.analysis import qa
+    from bot.worker import main as worker
+
+    posted, analyzed, updated = [], [], []
+
+    @contextmanager
+    def fake_conn():
+        yield object()
+
+    async def fake_replies(method, params):
+        return {"messages": [{"ts": "1.0", "text": "결제하면 500", "user": "U1"}]}
+
+    async def fake_classify(text, usage=None):
+        return "error"
+
+    async def fake_post(channel, text, **kwargs):
+        posted.append(text)
+        return {"ts": "2.0"}
+
+    async def fake_analyze(ctx, job_id, build_log=""):
+        analyzed.append(job_id)
+
+    monkeypatch.setattr(worker.store, "connect", fake_conn)
+    monkeypatch.setattr(worker.slack_client, "call_get", fake_replies)
+    monkeypatch.setattr(worker.slack_client, "post_message", fake_post)
+    monkeypatch.setattr(worker.jobs, "job_by_thread", lambda conn, channel, ts: {"id": 6, "status": status, "state": {"report": "결제하면 500"}})
+    monkeypatch.setattr(worker.jobs, "update_job", lambda conn, job_id, status=None, **state: updated.append(state))
+    monkeypatch.setattr(qa, "classify", fake_classify)
+    monkeypatch.setattr(worker, "analyze_error", fake_analyze)
+    asyncio.run(worker.on_mention({}, {"channel": "C1", "ts": "1.5", "thread_ts": "1.0", "text": "<@U0BOT> 아직도 500 나요"}))
+    if expected is None:
+        assert analyzed == [6] and posted == []
+        assert updated[0]["report"] == "결제하면 500\n\n[추가 설명]\n아직도 500 나요"  # 추가 설명을 붙여 다시 분석
+    else:
+        assert analyzed == [] and updated == [] and len(posted) == 1 and expected in posted[0]
+
+
+def test_reanalysis_is_limited_to_open_jobs():
+    from bot.worker import main as worker
+
+    assert not set(worker.REANALYZABLE) & set(worker.CLOSED + worker.BUSY)
