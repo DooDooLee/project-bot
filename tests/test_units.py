@@ -496,3 +496,16 @@ def test_mention_starts_without_buttons(monkeypatch, intent, expected):
 def test_to_mrkdwn():
     assert slack_ui.to_mrkdwn("**에러는 없습니다.** 9건\n## 요약\n• a") == "*에러는 없습니다.* 9건\n*요약*\n• a"
     assert slack_ui.to_mrkdwn("이미 *굵게* 인 글") == "이미 *굵게* 인 글"
+
+
+def test_color_bar_message_is_shown_once():
+    """색 띠만 있는 메시지는 본문 글을 비워서 같은 내용이 두 번 보이지 않게 한다."""
+    from bot import slack_client
+
+    card = slack_ui.notice("info", "*분석 중…*")
+    text, attachments = slack_client._only_once("*분석 중…*", None, card)
+    assert text == "" and attachments[0]["fallback"] == "*분석 중…*" and attachments[0]["blocks"] == card[0]["blocks"]
+    assert "fallback" not in card[0]  # 넘겨받은 값은 바꾸지 않는다
+    # blocks 가 있으면 Slack이 text 를 그리지 않으므로 그대로 둔다
+    assert slack_client._only_once("제목", [{"type": "divider"}], None) == ("제목", None)
+    assert slack_client._only_once("제목", [{"type": "divider"}], card) == ("제목", card)

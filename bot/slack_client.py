@@ -36,6 +36,7 @@ async def call_get(method: str, params: dict) -> dict:
 async def post_message(channel: str, text: str, thread_ts: str | None = None, blocks: list | None = None,
                        attachments: list | None = None) -> dict:
     """attachments 는 왼쪽에 색 띠가 붙는 영역이다. [{"color": "#E24B4A", "blocks": [...]}]"""
+    text, attachments = _only_once(text, blocks, attachments)
     payload: dict = {"channel": channel, "text": text}
     if thread_ts:
         payload["thread_ts"] = thread_ts
@@ -47,8 +48,21 @@ async def post_message(channel: str, text: str, thread_ts: str | None = None, bl
 
 
 async def update_message(channel: str, ts: str, text: str, blocks: list | None = None, attachments: list | None = None) -> dict:
+    text, attachments = _only_once(text, blocks, attachments)
     payload: dict = {"channel": channel, "ts": ts, "text": text, "blocks": blocks or [], "attachments": attachments or []}
     return await call("chat.update", payload)
+
+
+def _only_once(text: str, blocks: list | None, attachments: list | None) -> tuple[str, list | None]:
+    """색 띠만 있는 메시지는 글이 두 번 보이지 않게 한다.
+
+    Slack은 blocks 가 없으면 text 를 화면에 그리고, 그 아래 attachments 도 그린다.
+    그래서 text 는 비우고, 알림에 쓰는 글은 화면에 그려지지 않는 fallback 자리에 넣는다.
+    """
+    if not attachments or blocks:
+        return text, attachments
+    first = {**attachments[0], "fallback": text[:300]}
+    return "", [first, *attachments[1:]]
 
 
 async def delete_message(channel: str, ts: str) -> dict:
