@@ -358,3 +358,25 @@ def test_fix_result_blocks():
     # PR이 있으면 주소를 보여 주고, 해결 버튼은 두지 않는다 (merge되면 자동으로 해결 처리)
     _, with_pr = slack_ui.fix_result_blocks(14, {"explanation": "x"}, {**summary, "pr_url": "https://github.com/o/r/pull/1", "attempts": 2})
     assert "2번째 시도에 통과" in with_pr[0]["text"]["text"] and "pull/1" in with_pr[2]["text"]["text"] and len(with_pr) == 3
+
+
+def test_empty_mention_is_not_accepted(monkeypatch):
+    """내용 없이 봇만 부르면 접수하지 않고 쓰는 법을 안내한다 (빈 질문이 AI로 넘어가 400이 나던 문제)."""
+    import asyncio
+
+    from bot.worker import main as worker
+
+    posted = []
+
+    async def fake_post(channel, text, **kwargs):
+        posted.append((channel, text, kwargs))
+        return {"ts": "1.0"}
+
+    def no_db():
+        raise AssertionError("빈 멘션으로는 작업을 만들지 않는다")
+
+    monkeypatch.setattr(worker.slack_client, "post_message", fake_post)
+    monkeypatch.setattr(worker.store, "connect", no_db)
+    asyncio.run(worker.on_mention({}, {"channel": "C1", "ts": "1.2", "text": "<@U0BOT>  "}))
+    assert len(posted) == 1 and posted[0][1] == worker.EMPTY_MENTION
+    assert "actions" not in [b["type"] for b in posted[0][2]["blocks"]]

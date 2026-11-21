@@ -226,7 +226,10 @@ async def answer(ctx, job_id: int) -> None:
     with store.connect() as conn:
         job = jobs.get_job(conn, job_id)
     channel, thread = job["slack_channel"], job["slack_ts"]
-    question = job["state"].get("report", "")
+    question = (job["state"].get("report") or "").strip()
+    if not question:
+        await slack_client.post_message(channel, "질문 내용이 없습니다. 봇을 부를 때 질문을 함께 적어 주세요.", thread_ts=thread)
+        return
     usage = llm.Usage()
     started = time.time()
     try:

@@ -20,6 +20,14 @@ def _thread(event: dict) -> str:
     return event.get("thread_ts") or event["ts"]
 
 
+EMPTY_MENTION = (
+    "내용을 함께 적어서 불러 주세요.\n"
+    "• 오류: `@프로젝트 봇 방 만들기를 누르면 500 에러가 나요` (에러 메시지나 로그를 붙여도 됩니다)\n"
+    "• 질문: `@프로젝트 봇 방 입장 API는 어디에 구현돼 있어?`\n"
+    "에러를 올린 글의 스레드에서 부르면 그 글을 함께 읽습니다."
+)
+
+
 async def on_mention(ctx, event: dict) -> None:
     """멘션을 받으면 스레드에 접수 메시지와 버튼 두 개를 올린다."""
     channel, thread = event["channel"], _thread(event)
@@ -29,6 +37,10 @@ async def on_mention(ctx, event: dict) -> None:
         replies = await slack_client.call_get("conversations.replies", {"channel": channel, "ts": thread, "limit": 1})
         parent = (replies.get("messages") or [{}])[0].get("text", "")
         text = (parent + "\n" + text).strip()
+    if not text:
+        # 내용 없이 봇만 불렀으면 접수하지 않고 쓰는 법을 알려 준다
+        await slack_client.post_message(channel, EMPTY_MENTION, thread_ts=thread, blocks=[slack_client.section(EMPTY_MENTION)])
+        return
     with store.connect() as conn:
         job = jobs.upsert_job(conn, "report", channel, thread, {"report": text, "reported_at_ns": time.time_ns(), "user": event.get("user")})
     job_id = str(job["id"])
@@ -92,6 +104,11 @@ async def analyze_error(ctx, job_id: int, build_log: str = "") -> None:
             return
         job = jobs.get_job(conn, job_id)
     channel, thread = job["slack_channel"], job["slack_ts"]
+    if not (job["state"].get("report") or "").strip() and not (build_log or job["state"].get("build_log")):
+        with store.connect() as conn:
+            jobs.update_job(conn, job_id, "received")
+        await slack_client.post_message(channel, "분석할 내용이 없습니다. 봇을 부를 때 증상이나 에러 메시지를 함께 적어 주세요.", thread_ts=thread)
+        return
     progress = slack_ui.Progress(channel, thread, "분석 중")
     usage = llm.Usage()
     started = time.time()
