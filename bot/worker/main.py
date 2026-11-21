@@ -5,7 +5,7 @@ import logging
 import re
 import time
 
-from bot import llm, queue, slack_client
+from bot import llm, queue, slack_client, slack_ui
 from bot.analysis import flow
 from bot.config import load_project
 from bot.db import jobs, store
@@ -14,16 +14,10 @@ log = logging.getLogger("bot.worker")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s : %(message)s")
 
 _MENTION = re.compile(r"<@[A-Z0-9]+>")
-CONFIDENCE = {"high": "높음", "medium": "보통", "low": "낮음"}
 
 
 def _thread(event: dict) -> str:
     return event.get("thread_ts") or event["ts"]
-
-
-def _short(text: str, limit: int = 140) -> str:
-    text = " ".join(str(text).split())
-    return text if len(text) <= limit else text[:limit] + "…"
 
 
 async def on_mention(ctx, event: dict) -> None:
@@ -58,6 +52,9 @@ async def on_action(ctx, payload: dict) -> None:
     if not value.isdigit():
         return
     job_id = int(value)
+    if action_id == "show_evidence":
+        await show_evidence(ctx, job_id)
+        return
     labels = {
         "analyze_error": "오류 분석",
         "ask_question": "질문·조회",
@@ -65,11 +62,11 @@ async def on_action(ctx, payload: dict) -> None:
         "fix_manually": "직접 수정",
         "mark_resolved": "해결됨",
     }
-    # 누른 버튼은 없애고 누가 무엇을 골랐는지 남긴다
+    # 누른 메시지에서 버튼만 떼고, 누가 무엇을 골랐는지 작은 글씨로 남긴다. 본문은 그대로 둔다
     if channel and message.get("ts"):
-        original = next((b["text"]["text"] for b in message.get("blocks", []) if b.get("type") == "section"), message.get("text", ""))
-        chosen = f"{original}\n_<@{user}> 님이 *{labels.get(action_id, action_id)}* 선택_"
-        await slack_client.update_message(channel, message["ts"], chosen, blocks=[slack_client.section(chosen)])
+        kept = [b for b in message.get("blocks", []) if b.get("type") != "actions"]
+        kept.append(slack_ui.context(f"<@{user}> 님이 *{labels.get(action_id, action_id)}* 선택"))
+        await slack_client.update_message(channel, message["ts"], message.get("text", ""), blocks=kept)
     handler = {
         "analyze_error": analyze_error,
         "ask_question": ask_question,
@@ -81,51 +78,12 @@ async def on_action(ctx, payload: dict) -> None:
         await handler(ctx, job_id)
 
 
-class Progress:
-    """진행 상황을 스레드의 메시지 하나에 덮어쓴다."""
-
-    def __init__(self, channel: str, thread: str):
-        self.channel, self.thread, self.ts = channel, thread, None
-        self.steps: list[str] = []
-
-    async def __call__(self, text: str) -> None:
-        self.steps.append(text)
-        body = "\n".join(f"✓ {s}" for s in self.steps[:-1]) + ("\n" if len(self.steps) > 1 else "") + f"… {self.steps[-1]}"
-        if self.ts is None:
-            resp = await slack_client.post_message(self.channel, body, thread_ts=self.thread)
-            self.ts = resp.get("ts")
-        else:
-            await slack_client.update_message(self.channel, self.ts, body, blocks=[slack_client.section(body)])
-
-    async def done(self, text: str) -> None:
-        body = "\n".join(f"✓ {s}" for s in self.steps) + f"\n{text}"
-        if self.ts:
-            await slack_client.update_message(self.channel, self.ts, body, blocks=[slack_client.section(body)])
-
-
-def report_blocks(result: dict, state: dict, job_id: int) -> tuple[str, list]:
-    kind = flow.CAUSE_TYPES.get(result["cause_type"], result["cause_type"])
-    lines = [f"*원인 분석 결과*  (원인 종류: *{kind}*, 확신: {CONFIDENCE.get(result.get('confidence'), '-')})", "", f"*증상*  {result['symptom']}", f"*원인*  {result['cause']}"]
-    if result.get("symbol") or result.get("file_path"):
-        where = f"`{result.get('symbol') or ''}`"
-        if result.get("file_path"):
-            where += f"  ({result['file_path']}" + (f":{result['line']}" if result.get("line") else "") + ")"
-        lines.append(f"*위치*  {where}")
-    if result.get("evidence"):
-        lines.append("*근거*\n" + "\n".join(f"• {e}" for e in result["evidence"][:4]))
-    if result["cause_type"] == "code" and result.get("fix"):
-        lines.append(f"*수정 방향*  {result['fix']}")
-    if result["cause_type"] != "code" and result.get("action"):
-        lines.append(f"*조치 방법*\n{result['action']}")
-    if state.get("incidents"):
-        lines.append("*비슷한 과거 장애*\n" + "\n".join(f"• {i['created_at'][:10]} {i['symptom']} → {_short(i.get('resolution') or i.get('cause') or '-')}" for i in state["incidents"]))
-    text = "\n".join(lines)
-    blocks = [slack_client.section(text)]
-    if result["cause_type"] == "code":
-        blocks.append(slack_client.buttons(("AI로 수정", "fix_with_ai", str(job_id)), ("직접 수정", "fix_manually", str(job_id))))
-    else:
-        blocks.append(slack_client.buttons(("해결됨", "mark_resolved", str(job_id))))
-    return text, blocks
+async def show_evidence(ctx, job_id: int) -> None:
+    """[근거 보기]: 근거, 확인한 코드, 서버 로그, 비슷한 과거 장애를 스레드에 올린다."""
+    with store.connect() as conn:
+        job = jobs.get_job(conn, job_id)
+    text = slack_ui.evidence_text(job["state"])
+    await slack_client.post_message(job["slack_channel"], text, thread_ts=job["slack_ts"], blocks=[slack_client.section(text)])
 
 
 async def analyze_error(ctx, job_id: int, build_log: str = "") -> None:
@@ -134,7 +92,7 @@ async def analyze_error(ctx, job_id: int, build_log: str = "") -> None:
             return
         job = jobs.get_job(conn, job_id)
     channel, thread = job["slack_channel"], job["slack_ts"]
-    progress = Progress(channel, thread)
+    progress = slack_ui.Progress(channel, thread, "분석 중")
     usage = llm.Usage()
     started = time.time()
     try:
@@ -156,10 +114,11 @@ async def analyze_error(ctx, job_id: int, build_log: str = "") -> None:
                 conn, job_id, "analyzed", result=result, extracted=state.get("extracted"), incident_id=incident_id,
                 code=[{k: c[k] for k in ("service", "qualified_name", "name", "file_path", "start_line", "end_line")} for c in state.get("code", [])],
                 logs=[{**e, "line": e["line"][:4000]} for e in state.get("logs", [])],
+                incidents=state.get("incidents", []),
                 usage=usage.as_dict(), elapsed_seconds=elapsed,
             )
-        await progress.done(f"분석 완료 ({elapsed}초, 코드 {len(state.get('code', []))}개 확인)")
-        text, blocks = report_blocks(result, state, job_id)
+        await progress.done(f"분석 완료  ·  {elapsed}초  ·  코드 {len(state.get('code', []))}개 확인")
+        text, blocks = slack_ui.report_blocks(result, state, job_id)
         await slack_client.post_message(channel, text, thread_ts=thread, blocks=blocks)
     except Exception as e:
         log.exception("analyze_error failed job=%s", job_id)
@@ -189,13 +148,12 @@ async def fix_manually(ctx, job_id: int) -> None:
         job = jobs.get_job(conn, job_id)
     result = job["state"].get("result") or {}
     code = job["state"].get("code") or []
+    where = slack_ui.location(result).replace("`", "")
     summary = (
-        "아래 내용을 로컬 AI 도구에 붙여 넣어 수정하세요.\n```\n"
-        f"증상: {result.get('symptom')}\n원인: {result.get('cause')}\n"
-        f"위치: {result.get('symbol')} ({result.get('file_path')}:{result.get('line')})\n"
-        f"수정 방향: {result.get('fix')}\n"
-        "관련 코드:\n" + "\n".join(f"- {c['name']} ({c['file_path']}:{c['start_line']})" for c in code[:8]) + "\n```\n"
-        "수정을 마치면 *해결됨* 을 눌러 주세요."
+        "*직접 수정용 요약*  아래를 로컬 AI 도구에 붙여 넣으세요.\n```\n"
+        f"증상: {slack_ui.clean(result.get('symptom'))}\n원인: {slack_ui.clean(result.get('cause'))}\n"
+        f"위치: {where}\n수정 방향: {slack_ui.clean(result.get('fix'))}\n"
+        "관련 코드:\n" + "\n".join(f"- {c['name']} ({c['file_path']}:{c['start_line']})" for c in code[:6]) + "\n```"
     )
     await slack_client.post_message(
         job["slack_channel"], summary, thread_ts=job["slack_ts"],

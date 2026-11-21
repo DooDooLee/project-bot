@@ -303,3 +303,58 @@ def test_missing_new_symbol_requires_name_in_log():
 def test_build_log_strips_color_codes():
     out = jenkins.trim_build_log(" \x1b[32m✓\x1b[39m src/App.test.jsx \x1b[2m(1 test)\x1b[22m\n \x1b[1m\x1b[32m2 passed\x1b[39m\x1b[22m")
     assert "\x1b" not in out and "✓ src/App.test.jsx (1 test)" in out and "2 passed" in out
+
+
+# ── Slack 메시지 모양 ──────────────────────────────────────
+from bot import slack_ui
+
+
+def test_progress_renders_one_line_and_list():
+    p = slack_ui.Progress("C1", "1.0", "분석 중")
+    p.steps = ["정보 추출", "로그 조회", "코드 찾기"]
+    assert p._render() == "*분석 중…*  ✓ 정보 추출 · ✓ 로그 조회 · ▸ 코드 찾기"
+    q = slack_ui.Progress("C1", "1.0", "AI 수정 중", inline=False)
+    q.steps = ["수정안과 재현 테스트 작성", "수정 전 실패 확인 (Jenkins #5)", "수정 후 코드로 테스트 실행 중"]
+    assert q._render().splitlines() == ["*AI 수정 중*", "✓ 수정안과 재현 테스트 작성", "✓ 수정 전 실패 확인 (Jenkins #5)", "▸ 수정 후 코드로 테스트 실행 중"]
+
+
+def test_report_blocks_is_short_and_keeps_evidence_behind_button():
+    result = {
+        "cause_type": "code", "title": "라우터에 없는 주소를 받는 경로가 없음", "symptom": "없는 주소에서 빈 화면",
+        "cause": 'AppContent의 <Routes>에 path=\\"*\\" 라우트가 없어 아무것도 그려지지 않는다.',
+        "file_path": "frontend/src/App.jsx", "symbol": "AppContent", "line": 86, "confidence": "high",
+        "evidence": ["<Routes> 안에 정해진 경로만 있음", "Loki ERROR 로그 없음"], "fix": "맨 끝에 catch-all 라우트를 추가한다.", "action": None,
+    }
+    text, blocks = slack_ui.report_blocks(result, {"incidents": [{"symptom": "x"}]}, 7)
+    kinds = [b["type"] for b in blocks]
+    assert kinds == ["section", "context", "section", "actions"]
+    head = blocks[0]["text"]["text"]
+    assert head.startswith("*라우터에 없는 주소를 받는 경로가 없음*") and 'path="*"' in head and "\\" not in head
+    meta = blocks[1]["elements"][0]["text"]
+    assert "원인 종류: *코드*" in meta and "확신: 높음" in meta and "`frontend/src/App.jsx:86` AppContent" in meta and "비슷한 과거 장애 1건" in meta
+    assert [e["action_id"] for e in blocks[3]["elements"]] == ["fix_with_ai", "fix_manually", "show_evidence"]
+    # 근거는 본문에 없고 [근거 보기]를 눌렀을 때 나온다
+    assert "Loki ERROR 로그 없음" not in "".join(str(b) for b in blocks)
+    shown = slack_ui.evidence_text({"result": result, "code": [{"name": "App.jsx#AppContent", "file_path": "frontend/src/App.jsx", "start_line": 40}], "elapsed_seconds": 14.5})
+    assert "Loki ERROR 로그 없음" in shown and "App.jsx#AppContent" in shown and "14.5초" in shown
+
+
+def test_report_blocks_for_non_code_cause():
+    result = {"cause_type": "infra", "title": "CPU가 제한돼 기동이 느림", "cause": "CPU steal이 70%까지 올랐다.", "confidence": "medium",
+              "file_path": None, "symbol": None, "line": None, "action": "1. 크레딧 방식 확인\n2. 사양 올리기", "fix": None}
+    _, blocks = slack_ui.report_blocks(result, {}, 3)
+    assert "*조치 방법*" in blocks[2]["text"]["text"]
+    assert [e["action_id"] for e in blocks[3]["elements"]] == ["mark_resolved", "show_evidence"]
+
+
+def test_fix_result_blocks():
+    summary = {"elapsed": 77, "attempts": 1, "before": 5, "after": 6, "changed": ["frontend/src/pages/NotFoundPage.jsx", "frontend/src/App.jsx"],
+               "apis": [], "pr_url": "", "branch": "bot/fix-14"}
+    text, blocks = slack_ui.fix_result_blocks(14, {"explanation": "NotFoundPage를 만들고 catch-all 라우트로 연결했습니다."}, summary)
+    assert blocks[0]["text"]["text"].startswith("*수정 완료*  ·  77초\nNotFoundPage")
+    meta = blocks[1]["elements"][0]["text"]
+    assert "수정 전 실패 (#5) → 수정 후 통과 (#6)" in meta and "`NotFoundPage.jsx`, `App.jsx`" in meta
+    assert "`bot/fix-14`" in blocks[2]["text"]["text"] and blocks[3]["type"] == "actions"
+    # PR이 있으면 주소를 보여 주고, 해결 버튼은 두지 않는다 (merge되면 자동으로 해결 처리)
+    _, with_pr = slack_ui.fix_result_blocks(14, {"explanation": "x"}, {**summary, "pr_url": "https://github.com/o/r/pull/1", "attempts": 2})
+    assert "2번째 시도에 통과" in with_pr[0]["text"]["text"] and "pull/1" in with_pr[2]["text"]["text"] and len(with_pr) == 3

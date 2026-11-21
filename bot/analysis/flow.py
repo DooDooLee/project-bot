@@ -87,17 +87,18 @@ REPORT_SCHEMA = {
     "properties": {
         "cause_type": {"type": "string", "enum": list(CAUSE_TYPES), "description": "code: 저장소 코드의 문제. config: 서버 설정값·환경 변수. infra: 디스크·메모리·DB·네트워크. external: 외부 서비스(OpenAI, 카카오 등). unknown: 근거 부족"},
         "service": {"type": "string", "description": "문제가 난 서비스 이름"},
-        "symptom": {"type": "string", "description": "증상 한 문장"},
-        "cause": {"type": "string", "description": "원인. 2~4문장. 로그와 코드의 어느 부분이 근거인지 포함"},
+        "title": {"type": "string", "description": "원인을 한 줄로. 30자 안팎. 예: 라우터에 없는 주소를 받는 경로가 없음"},
+        "symptom": {"type": "string", "description": "증상 한 줄. 40자 안팎"},
+        "cause": {"type": "string", "description": "원인 설명. 두 문장 이내, 120자 안팎. 근거로 든 로그나 코드는 여기 적지 말고 evidence에 적는다"},
         "file_path": {"type": ["string", "null"], "description": "원인 위치의 파일 경로. 코드 문제가 아니면 null"},
         "symbol": {"type": ["string", "null"], "description": "원인 위치의 메서드·함수 이름 (제공된 코드의 이름 그대로)"},
         "line": {"type": ["integer", "null"]},
-        "evidence": {"type": "array", "items": {"type": "string"}, "description": "근거 2~4개. 로그 줄이나 코드 줄을 짧게 인용"},
-        "fix": {"type": ["string", "null"], "description": "cause_type이 code일 때: 어떻게 고치면 되는지 1~3문장"},
-        "action": {"type": ["string", "null"], "description": "cause_type이 code가 아닐 때: 사람이 할 조치 방법을 순서대로"},
+        "evidence": {"type": "array", "items": {"type": "string"}, "description": "근거 2~3개. 로그 줄이나 코드 줄을 한 줄씩 짧게 인용. 원인과 관계없는 지표나 로그는 적지 않는다"},
+        "fix": {"type": ["string", "null"], "description": "cause_type이 code일 때: 어떻게 고치면 되는지 한두 문장"},
+        "action": {"type": ["string", "null"], "description": "cause_type이 code가 아닐 때: 사람이 할 조치. 번호 목록 3개 이내, 한 항목은 한 줄"},
         "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
     },
-    "required": ["cause_type", "service", "symptom", "cause", "file_path", "symbol", "line", "evidence", "fix", "action", "confidence"],
+    "required": ["cause_type", "service", "title", "symptom", "cause", "file_path", "symbol", "line", "evidence", "fix", "action", "confidence"],
 }
 
 ANALYZE_SYSTEM = """너는 웹 서비스의 장애 원인을 분석하는 엔지니어다. 신고 내용, 서버 로그, 관련 코드, 비슷한 과거 장애를 받아 원인을 정리한다.
@@ -107,7 +108,9 @@ ANALYZE_SYSTEM = """너는 웹 서비스의 장애 원인을 분석하는 엔지
 - 스택 트레이스의 맨 위 줄이 항상 원인은 아니다. 값이 어디서 잘못 들어왔는지 호출한 쪽 코드까지 확인한다.
 - 브라우저 에러라도 서버가 준 응답 모양이 원인일 수 있다. 프론트 코드가 쓰는 필드와 백엔드 응답 클래스의 필드를 비교한다.
 - 원인이 저장소의 코드가 아니면(설정값, 디스크·메모리, 외부 서비스) code로 분류하지 않는다. 그런 문제는 코드를 고쳐서 해결되지 않는다.
-- 쉬운 한국어로 짧게 쓴다. 메서드 이름, 파일 경로는 제공된 그대로 쓴다."""
+- 결과는 Slack 메시지로 나간다. 쉬운 한국어로 짧게 쓴다. 각 칸의 길이 제한을 지킨다.
+- 메서드 이름, 파일 경로는 제공된 그대로 쓴다. 따옴표 앞에 역슬래시를 붙이지 않는다.
+- 원인과 관계없는 것(이번 증상과 무관한 지표, 다른 요청의 로그)은 언급하지 않는다."""
 
 
 def _time_window(report: str, extracted: dict, now_ns: int) -> tuple[int, int]:
@@ -183,7 +186,7 @@ def build_graph(ctx: Context):
     js_services = [s for s in ctx.project.services if s.language == "javascript"]
 
     async def extract(state: State) -> dict:
-        await ctx.progress("신고 내용에서 API, 상태 코드, 시각을 찾는 중")
+        await ctx.progress("정보 추출")
         report = state["report"]
         if state.get("build_log"):
             return {"extracted": {"summary": "배포(빌드) 실패", "where": "deploy"}, "hints": []}
@@ -199,7 +202,7 @@ def build_graph(ctx: Context):
         text_for_hints = report + "\n" + state.get("build_log", "")
         found: list[dict] = []
         if not state.get("build_log"):
-            await ctx.progress("Loki에서 그 시각의 서버 에러 로그를 찾는 중")
+            await ctx.progress("로그 조회")
             start, end = _time_window(report, ex, state["now_ns"])
             names = [s.log_label or s.name for s in java_services]
             entries = []
@@ -266,7 +269,7 @@ def build_graph(ctx: Context):
         return {"logs": found, "hints": hints, "metrics": snapshot}
 
     async def find_code(state: State) -> dict:
-        await ctx.progress("스택 트레이스의 메서드와 콜 그래프로 관련 코드를 찾는 중")
+        await ctx.progress("코드 찾기")
         ex = state["extracted"]
         picked: dict[str, dict] = {}
         frames_out: list[dict] = []
@@ -362,11 +365,11 @@ def build_graph(ctx: Context):
         with store.connect() as conn:
             rows = jobs.similar_incidents(conn, vector)
         if rows:
-            await ctx.progress(f"비슷한 과거 장애 {len(rows)}건을 찾음")
+            await ctx.progress(f"과거 장애 {len(rows)}건")
         return {"incidents": [{k: (str(v) if k == "created_at" else v) for k, v in r.items()} for r in rows]}
 
     async def analyze(state: State) -> dict:
-        await ctx.progress("원인을 분석하는 중")
+        await ctx.progress("원인 분석")
         parts = [f"## 신고 내용\n{state['report'][:6000]}"]
         if state.get("build_log"):
             parts.append(f"## Jenkins 빌드 로그 (실패 주변)\n{state['build_log'][:9000]}")

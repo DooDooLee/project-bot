@@ -19,6 +19,10 @@ from bot.tools import jenkins, logs, metrics
 log = logging.getLogger("bot.qa")
 KST = ZoneInfo("Asia/Seoul")
 NS = 1_000_000_000
+TOOL_LABELS = {
+    "query_logs": "로그", "query_metrics": "지표", "get_jenkins_build_log": "빌드 로그", "search_code": "코드 검색",
+    "get_call_graph": "호출 관계", "search_docs": "문서", "search_incidents": "장애 기록", "get_git_diff": "변경 내역",
+}
 OUT_OF_SCOPE = "이 봇은 프로젝트의 코드, 로그, 지표, 배포, 장애 기록에 대한 질문만 답합니다."
 
 TOOLS = [
@@ -111,7 +115,8 @@ SYSTEM = """너는 개발팀의 프로젝트 봇이다. 팀원이 Slack에서 �
 
 규칙
 - 도구로 확인한 내용만 답한다. 확인하지 못했으면 모른다고 말한다.
-- 쉬운 한국어로 짧게 답한다. 결론을 먼저 쓴다.
+- 쉬운 한국어로 짧게 답한다. 첫 줄에 결론을 쓰고, 그 아래는 8줄을 넘기지 않는다.
+- 확인 과정이나 확인하지 못한 세부는 길게 늘어놓지 않는다. 꼭 필요하면 마지막에 한 줄로만 쓴다.
 - 코드 위치는 파일 경로와 메서드 이름을 그대로 적는다.
 - Slack 메시지로 나가므로 *굵게*, `코드`, • 목록만 쓰고 표나 # 제목은 쓰지 않는다.
 - 지금 시각: {now} (한국 시간)"""
@@ -233,12 +238,12 @@ async def answer(ctx, job_id: int) -> None:
             await slack_client.post_message(channel, OUT_OF_SCOPE, thread_ts=thread)
             return
         used: list[str] = []
-        status = await slack_client.post_message(channel, "… 확인하는 중", thread_ts=thread)
+        status = await slack_client.post_message(channel, "*확인 중…*", thread_ts=thread)
 
         async def on_tool(name: str, args: dict) -> None:
             used.append(name)
             if status.get("ts"):
-                text = "… 확인하는 중: " + " → ".join(used)
+                text = "*확인 중…*  " + " · ".join(TOOL_LABELS.get(u, u) for u in used)
                 await slack_client.update_message(channel, status["ts"], text, blocks=[slack_client.section(text)])
 
         system = SYSTEM.format(now=datetime.now(KST).strftime("%Y-%m-%d %H:%M"))
@@ -250,7 +255,8 @@ async def answer(ctx, job_id: int) -> None:
         with store.connect() as conn:
             jobs.update_job(conn, job_id, "answered", answer=text, tools_used=used, usage=usage.as_dict(), elapsed_seconds=elapsed)
         if status.get("ts"):
-            done = f"✓ 확인 완료 ({elapsed}초, 도구 {len(used)}회: {', '.join(dict.fromkeys(used)) or '없음'})"
+            names = " · ".join(TOOL_LABELS.get(u, u) for u in dict.fromkeys(used)) or "도구 없이 답함"
+            done = f"확인 완료  ·  {elapsed}초  ·  {names}"
             await slack_client.update_message(channel, status["ts"], done, blocks=[slack_client.section(done)])
         await slack_client.post_message(channel, text or "답을 만들지 못했습니다.", thread_ts=thread, blocks=[slack_client.section(text or "답을 만들지 못했습니다.")])
     except Exception as e:

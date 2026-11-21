@@ -16,7 +16,7 @@ import re
 import time
 from pathlib import Path
 
-from bot import github, llm, repo, slack_client
+from bot import github, llm, repo, slack_client, slack_ui
 from bot.config import ProjectConfig, ServiceConfig
 from bot.db import jobs, store
 from bot.tools import jenkins
@@ -49,7 +49,7 @@ FIX_TOOL = {
     "input_schema": {
         "type": "object",
         "properties": {
-            "explanation": {"type": "string", "description": "무엇을 왜 바꿨는지 2~3문장"},
+            "explanation": {"type": "string", "description": "무엇을 어떻게 바꿨는지 두 문장 이내. Slack에 그대로 나간다"},
             "edits": {
                 "type": "array",
                 "items": {
@@ -246,8 +246,12 @@ async def run(ctx, job_id: int) -> None:
         job = jobs.get_job(conn, job_id)
     channel, thread = job["slack_channel"], job["slack_ts"]
 
-    async def say(text: str) -> None:
-        await slack_client.post_message(channel, text, thread_ts=thread, blocks=[slack_client.section(text)])
+    # 진행 상황은 메시지 하나를 고쳐 쓴다. Jenkins 테스트를 기다리는 시간이 길어 단계를 여러 줄로 보여 준다
+    progress = slack_ui.Progress(channel, thread, f"AI 수정 중  ·  브랜치 `bot/fix-{job_id}`", inline=False)
+
+    def tag(attempt: int) -> str:
+        """두 번째 시도부터만 몇 번째 시도인지 붙인다."""
+        return f"({attempt}번째 시도) " if attempt > 1 else ""
 
     usage = llm.Usage()
     started = time.time()
@@ -257,15 +261,18 @@ async def run(ctx, job_id: int) -> None:
     try:
         if not jenkins.configured():
             raise RuntimeError("Jenkins가 연결되어 있지 않아 테스트를 돌릴 수 없음")
-        await say(f"수정을 시작합니다. 브랜치 `{branch}`")
+        await progress("수정안과 재현 테스트 작성")
         root = await repo.new_worktree(project, branch)
         messages: list[dict] = [{"role": "user", "content": build_context(project, root, job)}]
         test_ok = False
         test_commit = ""
+        before_number = 0
         fix: dict = {}
         svc: ServiceConfig | None = None
         tool_id = ""
         for attempt in range(1, MAX_ATTEMPTS + 1):
+            if attempt > 1:
+                await progress(f"{tag(attempt)}수정안 다시 작성")
             fix_new, tool_id = await ask(messages, usage)
             if test_ok:  # 재시도 때 테스트는 처음 통과한 것을 그대로 쓴다
                 fix_new["test_file_path"], fix_new["test_content"], fix_new["test_name"] = fix["test_file_path"], fix["test_content"], fix["test_name"]
@@ -276,7 +283,7 @@ async def run(ctx, job_id: int) -> None:
                 svc = validate(project, root, fix, check_test=not test_ok)
             except Rejected as e:
                 history.append({"attempt": attempt, "stage": "validate", "outcome": str(e)})
-                await say(f"시도 {attempt}: 제출한 수정이 규칙에 맞지 않아 다시 요청합니다. ({e})")
+                await progress.replace(f"{tag(attempt)}제출이 규칙에 맞지 않아 거부: {slack_ui.short(e, 90)}")
                 feedback(messages, tool_id, f"제출이 거부됨: {e}")
                 continue
 
@@ -293,50 +300,53 @@ async def run(ctx, job_id: int) -> None:
                 # 수정으로 새로 만드는 클래스를 테스트가 쓰면, 수정 전에는 컴파일이 안 된다. 이 경우도 '수정 전 실패'로 본다
                 test_commit = await repo.commit_all(root, f"재현 테스트 추가: {Path(fix['test_file_path']).name}")
                 await repo.push(project, root, branch)
-                await say(f"시도 {attempt}: 재현 테스트를 올렸습니다. 수정 전 코드에서 실패하는지 Jenkins로 확인합니다.")
+                await progress(f"{tag(attempt)}수정 전 코드로 재현 테스트 실행 중")
                 before = await jenkins.run_and_wait(jenkins.test_job(), {"REPO_URL": tests_repo, "BRANCH": branch, "SERVICE": svc.name, "TESTS": test_filter})
                 outcome = test_outcome(before)
                 history.append({"attempt": attempt, "stage": "before_fix", "build": before["number"], "outcome": outcome})
                 if outcome == "passed":
-                    await say(f"시도 {attempt}: 테스트가 수정 전 코드에서도 통과했습니다. 버그를 재현하지 못한 테스트라 다시 요청합니다.")
+                    await progress.replace(f"{tag(attempt)}수정 전에도 테스트가 통과함 → 재현하지 못해 거부 (Jenkins #{before['number']})")
                     await repo.git("reset", "-q", "--hard", "HEAD~1", cwd=root)
                     feedback(messages, tool_id, "테스트가 수정 전 코드에서도 통과함. 버그를 재현하지 못함. 수정 전에는 실패하는 테스트로 다시 제출.")
                     continue
                 if outcome == "no_tests":
                     # 테스트가 실행되지도 않았다. 실패로 끝났어도 버그를 재현한 것이 아니다
-                    await say(f"시도 {attempt}: Jenkins가 테스트를 찾지 못했습니다. 재현으로 인정하지 않고 다시 요청합니다. (Jenkins #{before['number']})")
+                    await progress.replace(f"{tag(attempt)}Jenkins가 테스트를 찾지 못함 → 재현으로 인정하지 않음 (Jenkins #{before['number']})")
                     await repo.git("reset", "-q", "--hard", "HEAD~1", cwd=root)
                     feedback(messages, tool_id, f"테스트 실행기가 테스트를 찾지 못함. 테스트 파일 위치와 이름, test_name을 확인해 다시 제출.\n{before['log'][-3000:]}")
                     continue
                 if outcome == "build_error" and not missing_new_symbol(fix, before["log"]):
-                    await say(f"시도 {attempt}: 테스트가 컴파일되지 않아 다시 요청합니다. (Jenkins #{before['number']})")
+                    await progress.replace(f"{tag(attempt)}테스트가 빌드되지 않아 거부 (Jenkins #{before['number']})")
                     await repo.git("reset", "-q", "--hard", "HEAD~1", cwd=root)
                     feedback(messages, tool_id, f"테스트가 수정 전 코드에서 컴파일되지 않음. 테스트를 고쳐 다시 제출.\n{before['log'][-5000:]}")
                     continue
                 test_ok = True
                 if outcome == "build_error":
-                    await say(f"시도 {attempt}: 수정 전 코드에서는 테스트가 빌드되지 않습니다. 수정으로 새로 만드는 파일을 테스트가 쓰고, 실패 로그에 그 이름이 나오는 것을 확인해 수정 전 실패로 인정합니다. (Jenkins #{before['number']})")
+                    await progress.replace(f"수정 전 실패 확인: 새로 만드는 파일이 없어 빌드되지 않음 (Jenkins #{before['number']})")
                 else:
-                    await say(f"시도 {attempt}: 수정 전 코드에서 테스트가 실패하는 것을 확인했습니다. (Jenkins #{before['number']})")
+                    await progress.replace(f"수정 전 실패 확인 (Jenkins #{before['number']})")
+                before_number = before["number"]
 
             # 2단계: 수정을 올려서 통과하는지 본다
             changed = apply_edits(root, fix)
             await repo.commit_all(root, fix["commit_message"].splitlines()[0][:100])
             await repo.push(project, root, branch)
-            await say(f"시도 {attempt}: 수정을 올렸습니다. Jenkins에서 테스트를 돌립니다.\n> {fix['explanation']}")
+            await progress(f"{tag(attempt)}수정 후 코드로 테스트 실행 중")
             after_filter = "*Test" if svc.language == "java" else ""
             after = await jenkins.run_and_wait(jenkins.test_job(), {"REPO_URL": tests_repo, "BRANCH": branch, "SERVICE": svc.name, "TESTS": after_filter})
             outcome = test_outcome(after)
             history.append({"attempt": attempt, "stage": "after_fix", "build": after["number"], "outcome": outcome})
             if outcome == "passed":
-                await finish(ctx, job, project, root, branch, fix, changed, history, usage, started, after["number"], say)
+                await progress.replace(f"수정 후 통과 확인 (Jenkins #{after['number']})")
+                await finish(ctx, job, project, root, branch, fix, changed, history, usage, started, before_number, after["number"], progress)
                 return
-            await say(f"시도 {attempt}: 테스트 실패 (Jenkins #{after['number']}). 실패 로그를 보고 다시 고칩니다.")
+            await progress.replace(f"{tag(attempt)}수정 후에도 테스트 실패 (Jenkins #{after['number']})")
             feedback(messages, tool_id, f"Jenkins 테스트 실패 (#{after['number']}). 로그를 보고 수정만 다시 제출. 테스트는 그대로 둔다.\n{after['log'][-7000:]}")
 
         with store.connect() as conn:
             jobs.update_job(conn, job_id, "fix_failed", fix={"branch": branch, "history": history, "usage": usage.as_dict()})
-        text = f"자동 수정에 실패했습니다 ({MAX_ATTEMPTS}번 시도). 브랜치 `{branch}`에 마지막 시도가 남아 있습니다. 직접 수정이 필요합니다."
+        await progress.done("*AI 수정 실패*")
+        text = f"*자동 수정 실패*  ·  {MAX_ATTEMPTS}번 시도\n마지막 시도는 브랜치 `{branch}`에 있습니다. 직접 수정이 필요합니다."
         await slack_client.post_message(channel, text, thread_ts=thread, blocks=[slack_client.section(text), slack_client.buttons(("직접 수정", "fix_manually", str(job_id)))])
     except Exception as e:
         log.exception("fix failed job=%s", job_id)
@@ -346,7 +356,7 @@ async def run(ctx, job_id: int) -> None:
         await slack_client.post_message(channel, text, thread_ts=thread, blocks=[slack_client.section(text), slack_client.buttons(("다시 시도", "fix_with_ai", str(job_id)))])
 
 
-async def finish(ctx, job, project, root, branch, fix, changed, history, usage, started, build_number, say) -> None:
+async def finish(ctx, job, project, root, branch, fix, changed, history, usage, started, before_number, build_number, progress) -> None:
     job_id = job["id"]
     result = job["state"].get("result") or {}
     elapsed = round(time.time() - started)
@@ -365,26 +375,19 @@ async def finish(ctx, job, project, root, branch, fix, changed, history, usage, 
         "_프로젝트 봇이 만든 PR입니다. 내용을 확인한 뒤 merge해 주세요._",
     ])
     pr_url = ""
-    note = ""
     if github.enabled():
         owner, name = repo.owner_repo(project.repo_url)
         await repo.push_to(project.repo_url, root, branch)
         pr_url = await github.create_pr(owner, name, branch, project.branch, fix["commit_message"].splitlines()[0][:100], body)
-    else:
-        note = "\nGitHub 토큰이 설정되지 않아 PR은 만들지 못했습니다. 브랜치는 저장소에 올라가 있습니다."
     with store.connect() as conn:
         jobs.update_job(conn, job_id, "fixed", fix={"branch": branch, "pr_url": pr_url, "history": history, "changed": changed,
                                                    "test": fix["test_name"], "usage": usage.as_dict(), "elapsed_seconds": elapsed, "pr_body": body})
         if pr_url and job["state"].get("incident_id"):
             jobs.set_incident_pr(conn, job["state"]["incident_id"], pr_url)
-    cache = usage.cache_read_input_tokens
-    text = (f"*수정 완료* ({elapsed}초, 시도 {max(h['attempt'] for h in history)}번)\n"
-            f"• 재현 테스트: 수정 전 실패 → 수정 후 통과 (Jenkins #{build_number})\n"
-            f"• 바뀐 파일: {', '.join(f'`{c}`' for c in changed)}\n"
-            f"• 영향받는 API: {', '.join(f'`{a}`' for a in apis[:5]) or '찾지 못함'}\n"
-            + (f"• PR: {pr_url}\n확인한 뒤 merge해 주세요. merge되면 해결로 기록합니다." if pr_url else f"• 브랜치: `{branch}`{note}")
-            + (f"\n_프롬프트 캐시로 읽은 토큰: {cache:,}_" if cache else ""))
-    blocks = [slack_client.section(text)]
-    if not pr_url:
-        blocks.append(slack_client.buttons(("해결됨", "mark_resolved", str(job_id))))
+    attempts = max(h["attempt"] for h in history)
+    await progress.done(f"*AI 수정 완료*  ·  {elapsed}초")
+    text, blocks = slack_ui.fix_result_blocks(job_id, fix, {
+        "elapsed": elapsed, "attempts": attempts, "before": before_number, "after": build_number,
+        "changed": changed, "apis": apis, "pr_url": pr_url, "branch": branch,
+    })
     await slack_client.post_message(job["slack_channel"], text, thread_ts=job["slack_ts"], blocks=blocks)
