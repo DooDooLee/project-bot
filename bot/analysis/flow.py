@@ -95,10 +95,11 @@ REPORT_SCHEMA = {
         "line": {"type": ["integer", "null"]},
         "evidence": {"type": "array", "items": {"type": "string"}, "description": "근거 2~3개. 로그 줄이나 코드 줄을 한 줄씩 짧게 인용. 원인과 관계없는 지표나 로그는 적지 않는다"},
         "fix": {"type": ["string", "null"], "description": "cause_type이 code일 때: 어떻게 고치면 되는지 한두 문장"},
-        "action": {"type": ["string", "null"], "description": "cause_type이 code가 아닐 때: 사람이 할 조치. 번호 목록 3개 이내, 한 항목은 한 줄"},
+        "points": {"type": "array", "items": {"type": "string"}, "description": "원인의 요점 2~3개. 한 항목은 25자 안팎의 짧은 구절로 쓰고 문장으로 쓰지 않는다. 예: ERROR 로그 없음 / 재고가 0일 때 예외를 던지지 않음"},
+        "steps": {"type": ["array", "null"], "items": {"type": "string"}, "description": "cause_type이 code가 아닐 때: 사람이 할 조치 3개 이내. 한 항목은 35자 안팎의 짧은 구절. 번호는 붙이지 않는다. 예: 디스크 사용량 확인 후 오래된 로그 삭제"},
         "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
     },
-    "required": ["cause_type", "service", "title", "symptom", "cause", "file_path", "symbol", "line", "evidence", "fix", "action", "confidence"],
+    "required": ["cause_type", "service", "title", "symptom", "cause", "file_path", "symbol", "line", "evidence", "fix", "points", "steps", "confidence"],
 }
 
 ANALYZE_SYSTEM = """너는 웹 서비스의 장애 원인을 분석하는 엔지니어다. 신고 내용, 서버 로그, 관련 코드, 비슷한 과거 장애를 받아 원인을 정리한다.
@@ -395,6 +396,8 @@ def build_graph(ctx: Context):
             llm.SONNET, ANALYZE_SYSTEM, "\n\n".join(parts), name="report_cause", description="분석한 원인을 보고한다",
             schema=REPORT_SCHEMA, max_tokens=1800, usage=ctx.usage,
         )
+        # 장애 기록에는 조치를 글 한 덩어리로 남긴다
+        result["action"] = "\n".join(f"{i}. {s}" for i, s in enumerate(result.get("steps") or [], 1)) or None
         return {"result": result}
 
     g = StateGraph(State)

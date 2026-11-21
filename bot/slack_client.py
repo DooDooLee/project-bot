@@ -33,18 +33,26 @@ async def call_get(method: str, params: dict) -> dict:
     return data
 
 
-async def post_message(channel: str, text: str, thread_ts: str | None = None, blocks: list | None = None) -> dict:
+async def post_message(channel: str, text: str, thread_ts: str | None = None, blocks: list | None = None,
+                       attachments: list | None = None) -> dict:
+    """attachments 는 왼쪽에 색 띠가 붙는 영역이다. [{"color": "#E24B4A", "blocks": [...]}]"""
     payload: dict = {"channel": channel, "text": text}
     if thread_ts:
         payload["thread_ts"] = thread_ts
     if blocks:
         payload["blocks"] = blocks
+    if attachments:
+        payload["attachments"] = attachments
     return await call("chat.postMessage", payload)
 
 
-async def update_message(channel: str, ts: str, text: str, blocks: list | None = None) -> dict:
-    payload: dict = {"channel": channel, "ts": ts, "text": text, "blocks": blocks or []}
+async def update_message(channel: str, ts: str, text: str, blocks: list | None = None, attachments: list | None = None) -> dict:
+    payload: dict = {"channel": channel, "ts": ts, "text": text, "blocks": blocks or [], "attachments": attachments or []}
     return await call("chat.update", payload)
+
+
+async def delete_message(channel: str, ts: str) -> dict:
+    return await call("chat.delete", {"channel": channel, "ts": ts})
 
 
 def buttons(*items: tuple[str, str, str], style_first: bool = True) -> dict:
@@ -60,3 +68,17 @@ def buttons(*items: tuple[str, str, str], style_first: bool = True) -> dict:
 
 def section(text: str) -> dict:
     return {"type": "section", "text": {"type": "mrkdwn", "text": text[:2900]}}
+
+
+def header(text: str) -> dict:
+    """큰 글씨 한 줄. 메시지에서 가장 먼저 읽히는 결론에 쓴다."""
+    return {"type": "header", "text": {"type": "plain_text", "text": text[:150], "emoji": True}}
+
+
+def fields(*pairs: tuple[str, str]) -> dict:
+    """이름과 값을 두 칸씩 나란히 보여 준다. pairs: (이름, 값)"""
+    return {"type": "section", "fields": [{"type": "mrkdwn", "text": f"*{k}*\n{v}"[:1900]} for k, v in pairs[:10]]}
+
+
+def divider() -> dict:
+    return {"type": "divider"}

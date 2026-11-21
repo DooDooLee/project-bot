@@ -269,12 +269,12 @@ async def answer(ctx, job_id: int, intent: str | None = None) -> None:
         elapsed = round(time.time() - started, 1)
         with store.connect() as conn:
             jobs.update_job(conn, job_id, "answered", answer=text, tools_used=used, usage=usage.as_dict(), elapsed_seconds=elapsed)
+        names = " · ".join(TOOL_LABELS.get(u, u) for u in dict.fromkeys(used)) or "도구 없이 답함"
         if status.get("ts"):
-            names = " · ".join(TOOL_LABELS.get(u, u) for u in dict.fromkeys(used)) or "도구 없이 답함"
-            done = f"확인 완료  ·  {elapsed}초  ·  {names}"
-            await slack_client.update_message(channel, status["ts"], done, blocks=[slack_client.section(done)])
-        shown = slack_ui.to_mrkdwn(text) or "답을 만들지 못했습니다."
-        await slack_client.post_message(channel, shown, thread_ts=thread, blocks=[slack_client.section(shown)])
+            # 진행 메시지는 지우고 답 하나만 남긴다
+            await slack_client.delete_message(channel, status["ts"])
+        shown, blocks = slack_ui.answer_message(text, elapsed, names)
+        await slack_client.post_message(channel, shown, thread_ts=thread, blocks=blocks)
     except Exception as e:
         log.exception("qa failed job=%s", job_id)
         await slack_client.post_message(channel, f"답하는 중 오류가 났습니다: `{str(e)[:200]}`", thread_ts=thread)

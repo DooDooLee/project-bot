@@ -318,46 +318,122 @@ def test_progress_renders_one_line_and_list():
     assert q._render().splitlines() == ["*AI 수정 중*", "✓ 수정안과 재현 테스트 작성", "✓ 수정 전 실패 확인 (Jenkins #5)", "▸ 수정 후 코드로 테스트 실행 중"]
 
 
-def test_report_blocks_is_short_and_keeps_evidence_behind_button():
+def _card(attachments):
+    """색 띠 영역 하나에서 색과 블록을 꺼낸다."""
+    assert len(attachments) == 1
+    return attachments[0]["color"], attachments[0]["blocks"]
+
+
+def test_report_message_shows_conclusion_first():
     result = {
         "cause_type": "code", "title": "라우터에 없는 주소를 받는 경로가 없음", "symptom": "없는 주소에서 빈 화면",
         "cause": 'AppContent의 <Routes>에 path=\\"*\\" 라우트가 없어 아무것도 그려지지 않는다.',
+        "points": ["<Routes>에 path=\\\"*\\\" 라우트 없음", "없는 주소에서 아무것도 그리지 않음"],
         "file_path": "frontend/src/App.jsx", "symbol": "AppContent", "line": 86, "confidence": "high",
-        "evidence": ["<Routes> 안에 정해진 경로만 있음", "Loki ERROR 로그 없음"], "fix": "맨 끝에 catch-all 라우트를 추가한다.", "action": None,
+        "evidence": ["<Routes> 안에 정해진 경로만 있음", "Loki ERROR 로그 없음"], "fix": "맨 끝에 catch-all 라우트를 추가한다.", "steps": None,
     }
-    text, blocks = slack_ui.report_blocks(result, {"incidents": [{"symptom": "x"}]}, 7)
-    kinds = [b["type"] for b in blocks]
-    assert kinds == ["section", "context", "section", "actions"]
-    head = blocks[0]["text"]["text"]
-    assert head.startswith("*라우터에 없는 주소를 받는 경로가 없음*") and 'path="*"' in head and "\\" not in head
-    meta = blocks[1]["elements"][0]["text"]
-    assert "원인 종류: *코드*" in meta and "확신: 높음" in meta and "`frontend/src/App.jsx:86` AppContent" in meta and "비슷한 과거 장애 1건" in meta
-    assert [e["action_id"] for e in blocks[3]["elements"]] == ["fix_with_ai", "fix_manually", "show_evidence"]
+    state = {"incidents": [{"symptom": "x"}], "code": [{"name": "a"}, {"name": "b"}]}
+    text, attachments = slack_ui.report_message(result, state, 7, 14.4)
+    color, blocks = _card(attachments)
+    assert color == slack_ui.COLORS["code"]  # 코드 문제는 빨간 띠
+    assert [b["type"] for b in blocks] == ["header", "section", "section", "divider", "section", "actions", "context"]
+    # 맨 위 큰 글씨가 결론이다
+    assert blocks[0]["text"]["text"] == "🔴 라우터에 없는 주소를 받는 경로가 없음"
+    # 종류, 확신, 위치는 두 칸 표로
+    cells = [f["text"] for f in blocks[1]["fields"]]
+    assert cells == ["*원인 종류*\n코드", "*확신*\n높음", "*위치*\n`App.jsx:86`\nAppContent", "*비슷한 과거 장애*\n1건"]
+    # 원인은 짧은 항목으로, 따옴표 앞 역슬래시는 없앤다
+    assert blocks[2]["text"]["text"] == '*원인*\n• <Routes>에 path="*" 라우트 없음\n• 없는 주소에서 아무것도 그리지 않음'
+    assert blocks[4]["text"]["text"].startswith("*수정 방향*\n맨 끝에")
+    assert [e["action_id"] for e in blocks[5]["elements"]] == ["fix_with_ai", "fix_manually", "show_evidence"]
+    assert blocks[6]["elements"][0]["text"] == "14.4초  ·  코드 2개 확인"
+    assert text == "라우터에 없는 주소를 받는 경로가 없음 (코드)"
     # 근거는 본문에 없고 [근거 보기]를 눌렀을 때 나온다
-    assert "Loki ERROR 로그 없음" not in "".join(str(b) for b in blocks)
+    assert "Loki ERROR 로그 없음" not in str(blocks)
     shown = slack_ui.evidence_text({"result": result, "code": [{"name": "App.jsx#AppContent", "file_path": "frontend/src/App.jsx", "start_line": 40}], "elapsed_seconds": 14.5})
     assert "Loki ERROR 로그 없음" in shown and "App.jsx#AppContent" in shown and "14.5초" in shown
 
 
-def test_report_blocks_for_non_code_cause():
+def test_report_message_for_non_code_cause():
     result = {"cause_type": "infra", "title": "CPU가 제한돼 기동이 느림", "cause": "CPU steal이 70%까지 올랐다.", "confidence": "medium",
-              "file_path": None, "symbol": None, "line": None, "action": "1. 크레딧 방식 확인\n2. 사양 올리기", "fix": None}
-    _, blocks = slack_ui.report_blocks(result, {}, 3)
-    assert "*조치 방법*" in blocks[2]["text"]["text"]
-    assert [e["action_id"] for e in blocks[3]["elements"]] == ["mark_resolved", "show_evidence"]
+              "points": ["CPU steal 70%"], "file_path": None, "symbol": None, "line": None,
+              "steps": ["1. 크레딧 방식 확인", "사양 올리기"], "fix": None}
+    _, attachments = slack_ui.report_message(result, {}, 3)
+    color, blocks = _card(attachments)
+    assert color == slack_ui.COLORS["infra"] and blocks[0]["text"]["text"].startswith("🟠 ")
+    assert len(blocks[1]["fields"]) == 2  # 위치와 과거 장애는 없으면 칸을 만들지 않는다
+    todo = next(b["text"]["text"] for b in blocks if b["type"] == "section" and "text" in b and b["text"]["text"].startswith("*다음 할 일*"))
+    assert todo == "*다음 할 일*\n1. 크레딧 방식 확인\n2. 사양 올리기"  # 번호가 이미 붙어 있어도 한 번만
+    assert [e["action_id"] for e in blocks[-1]["elements"]] == ["mark_resolved", "show_evidence"]  # 걸린 시간이 없으면 작은 글씨 줄도 없다
 
 
-def test_fix_result_blocks():
+def test_report_message_reads_old_results_and_unknown_cause():
+    """points, steps 가 없는 예전 분석 결과도 같은 모양으로 보여 준다."""
+    result = {"cause_type": "unknown", "title": "원인을 특정할 근거 부족", "confidence": "low", "file_path": None,
+              "cause": "ERROR 로그가 없습니다. 신고된 주소가 코드와 다릅니다.", "action": "1. 응답 본문 확인\n2. WARN 로그 조회"}
+    _, attachments = slack_ui.report_message(result, {}, 5)
+    color, blocks = _card(attachments)
+    assert color == slack_ui.COLORS["unknown"]
+    assert blocks[2]["text"]["text"] == "*확인한 것*\n• ERROR 로그가 없습니다.\n• 신고된 주소가 코드와 다릅니다."
+    assert "*다음 할 일*\n1. 응답 본문 확인\n2. WARN 로그 조회" in str(blocks[4]["text"]["text"])
+
+
+def test_fix_result_message():
     summary = {"elapsed": 77, "attempts": 1, "before": 5, "after": 6, "changed": ["frontend/src/pages/NotFoundPage.jsx", "frontend/src/App.jsx"],
                "apis": [], "pr_url": "", "branch": "bot/fix-14"}
-    text, blocks = slack_ui.fix_result_blocks(14, {"explanation": "NotFoundPage를 만들고 catch-all 라우트로 연결했습니다."}, summary)
-    assert blocks[0]["text"]["text"].startswith("*수정 완료*  ·  77초\nNotFoundPage")
-    meta = blocks[1]["elements"][0]["text"]
-    assert "수정 전 실패 (#5) → 수정 후 통과 (#6)" in meta and "`NotFoundPage.jsx`, `App.jsx`" in meta
-    assert "`bot/fix-14`" in blocks[2]["text"]["text"] and blocks[3]["type"] == "actions"
+    text, attachments = slack_ui.fix_result_message(14, {"explanation": "NotFoundPage를 만들고 catch-all 라우트로 연결했습니다."}, summary)
+    color, blocks = _card(attachments)
+    assert color == slack_ui.COLORS["done"] and blocks[0]["text"]["text"] == "🟢 수정 완료"
+    cells = [f["text"] for f in blocks[1]["fields"]]
+    assert cells == ["*검증*\n수정 전 실패 #5\n수정 후 통과 #6", "*바뀐 파일*\n`NotFoundPage.jsx`\n`App.jsx`"]
+    assert blocks[2]["text"]["text"].startswith("*바꾼 내용*\nNotFoundPage")
+    assert "`bot/fix-14`" in blocks[4]["text"]["text"] and blocks[5]["type"] == "actions"
+    assert blocks[-1]["elements"][0]["text"] == "77초" and text == "수정 완료 (77초)"
     # PR이 있으면 주소를 보여 주고, 해결 버튼은 두지 않는다 (merge되면 자동으로 해결 처리)
-    _, with_pr = slack_ui.fix_result_blocks(14, {"explanation": "x"}, {**summary, "pr_url": "https://github.com/o/r/pull/1", "attempts": 2})
-    assert "2번째 시도에 통과" in with_pr[0]["text"]["text"] and "pull/1" in with_pr[2]["text"]["text"] and len(with_pr) == 3
+    _, with_pr = slack_ui.fix_result_message(14, {"explanation": "x"}, {**summary, "pr_url": "https://github.com/o/r/pull/1", "attempts": 2, "apis": ["GET /a"]})
+    _, pr_blocks = _card(with_pr)
+    assert "pull/1" in str(pr_blocks) and "actions" not in [b["type"] for b in pr_blocks]
+    assert pr_blocks[-1]["elements"][0]["text"] == "77초  ·  2번째 시도에 통과"
+    assert "*영향받는 API*\n`GET /a`" in [f["text"] for f in pr_blocks[1]["fields"]]
+
+
+def test_answer_message_and_notice():
+    shown, blocks = slack_ui.answer_message("**에러 없음**", 7.9, "로그")
+    assert shown == "*에러 없음*" and blocks[0]["text"]["text"] == "*에러 없음*"
+    assert blocks[1]["elements"][0]["text"] == "7.9초  ·  로그"
+    assert slack_ui.notice("failed", "*배포 실패 #4*") == [{"color": slack_ui.COLORS["failed"], "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": "*배포 실패 #4*"}}]}]
+
+
+def test_button_click_keeps_card_and_removes_buttons(monkeypatch):
+    """색 띠가 있는 메시지에서 버튼을 누르면 띠와 본문은 그대로 두고 버튼만 뗀다."""
+    import asyncio
+
+    from bot.worker import main as worker
+
+    updated, ran = [], []
+
+    async def fake_update(channel, ts, text, blocks=None, attachments=None):
+        updated.append((blocks, attachments))
+        return {}
+
+    async def fake_resolved(ctx, job_id):
+        ran.append(job_id)
+
+    monkeypatch.setattr(worker.slack_client, "update_message", fake_update)
+    monkeypatch.setattr(worker, "mark_resolved", fake_resolved)
+    _, attachments = slack_ui.report_message({"cause_type": "infra", "title": "t", "confidence": "low", "file_path": None, "steps": ["a"]}, {}, 9)
+    payload = {
+        "actions": [{"action_id": "mark_resolved", "value": "9"}], "channel": {"id": "C1"}, "user": {"id": "U1"},
+        # Slack은 색을 # 없이 돌려준다
+        "message": {"ts": "1.5", "text": "t", "attachments": [{"color": "E8833A", "blocks": attachments[0]["blocks"]}]},
+    }
+    asyncio.run(worker.on_action({}, payload))
+    blocks, cards = updated[0]
+    assert blocks == [] and cards[0]["color"] == "#E8833A"
+    kinds = [b["type"] for b in cards[0]["blocks"]]
+    assert "actions" not in kinds and kinds[0] == "header"
+    assert "<@U1> 님이 *해결됨* 선택" in cards[0]["blocks"][-1]["elements"][0]["text"]
+    assert ran == [9]
 
 
 def test_empty_mention_is_not_accepted(monkeypatch):

@@ -345,7 +345,7 @@ async def run(ctx, job_id: int) -> None:
 
         with store.connect() as conn:
             jobs.update_job(conn, job_id, "fix_failed", fix={"branch": branch, "history": history, "usage": usage.as_dict()})
-        await progress.done("*AI 수정 실패*")
+        await progress.done("*AI 수정 실패*", "failed")
         text = f"*자동 수정 실패*  ·  {MAX_ATTEMPTS}번 시도\n마지막 시도는 브랜치 `{branch}`에 있습니다. 직접 수정이 필요합니다."
         await slack_client.post_message(channel, text, thread_ts=thread, blocks=[slack_client.section(text), slack_client.buttons(("직접 수정", "fix_manually", str(job_id)))])
     except Exception as e:
@@ -386,8 +386,8 @@ async def finish(ctx, job, project, root, branch, fix, changed, history, usage, 
             jobs.set_incident_pr(conn, job["state"]["incident_id"], pr_url)
     attempts = max(h["attempt"] for h in history)
     await progress.done(f"*AI 수정 완료*  ·  {elapsed}초")
-    text, blocks = slack_ui.fix_result_blocks(job_id, fix, {
+    text, attachments = slack_ui.fix_result_message(job_id, fix, {
         "elapsed": elapsed, "attempts": attempts, "before": before_number, "after": build_number,
         "changed": changed, "apis": apis, "pr_url": pr_url, "branch": branch,
     })
-    await slack_client.post_message(job["slack_channel"], text, thread_ts=job["slack_ts"], blocks=blocks)
+    await slack_client.post_message(job["slack_channel"], text, thread_ts=job["slack_ts"], attachments=attachments)

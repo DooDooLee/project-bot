@@ -10,7 +10,7 @@ import logging
 import os
 import time
 
-from bot import code_cache, repo, slack_client
+from bot import code_cache, repo, slack_client, slack_ui
 from bot.db import jobs, store
 from bot.indexing import docs, enrich
 from bot.indexing.indexer import index_project
@@ -83,7 +83,7 @@ async def handle(ctx, payload: dict) -> None:
 
     if status == "STARTED":
         text = f"*배포 시작 #{number}*  브랜치 `{payload.get('branch', '-')}`  커밋 `{commit or '-'}`"
-        resp = await slack_client.post_message(channel, text, blocks=[slack_client.section(text)])
+        resp = await slack_client.post_message(channel, text, attachments=slack_ui.notice("info", text))
         if resp.get("ts"):
             await redis.set(_key(payload), resp["ts"], ex=60 * 60 * 6)
         return
@@ -95,28 +95,30 @@ async def handle(ctx, payload: dict) -> None:
         thread = resp.get("ts")
 
     if status == "SUCCESS":
-        await slack_client.post_message(channel, f"배포 성공 #{number}. 바뀐 코드를 다시 읽는 중…", thread_ts=thread)
+        text = f"*배포 성공 #{number}*"
+        await slack_client.post_message(channel, text, thread_ts=thread, attachments=slack_ui.notice("done", text))
         try:
             s = await reindex(ctx)
             maps = await store_sourcemaps(payload.get("job"), number)
-            await slack_client.post_message(
-                channel,
-                f"코드 갱신 완료 (커밋 `{s['commit']}`): 추가 {s['inserted']} / 변경 {s['updated']} / 삭제 {s['deleted']}, "
-                f"설명 다시 생성 {s['described']}개, 소스맵 {maps}개 보관",
-                thread_ts=thread,
+            note = slack_ui.context(
+                f"코드 다시 읽기 완료 (커밋 `{s['commit']}`)", f"추가 {s['inserted']}", f"변경 {s['updated']}", f"삭제 {s['deleted']}",
+                f"소스맵 {maps}개 보관",
             )
+            await slack_client.post_message(channel, "코드 다시 읽기 완료", thread_ts=thread, blocks=[note])
         except Exception as e:
             log.exception("reindex failed")
             await slack_client.post_message(channel, f"코드 갱신 실패: `{str(e)[:200]}`", thread_ts=thread)
         return
 
     if status == "ABORTED":  # 사람이 중단한 배포는 장애가 아니므로 분석하지 않는다
-        await slack_client.post_message(channel, f"배포 중단 #{number}", thread_ts=thread)
+        text = f"*배포 중단 #{number}*"
+        await slack_client.post_message(channel, text, thread_ts=thread, attachments=slack_ui.notice("muted", text))
         return
 
     if status in ("FAILURE", "UNSTABLE"):
         stage = payload.get("stage") or "-"
-        await slack_client.post_message(channel, f"배포 실패 #{number} (단계: {stage}). 원인 분석을 시작합니다.", thread_ts=thread)
+        text = f"*배포 실패 #{number}*  ·  단계 `{stage}`\n원인 분석을 시작합니다."
+        await slack_client.post_message(channel, text, thread_ts=thread, attachments=slack_ui.notice("failed", text))
         try:
             build_log = jenkins.trim_build_log(await jenkins.console_text(payload.get("job"), number))
         except Exception as e:

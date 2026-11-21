@@ -63,15 +63,22 @@ def replies(thread_ts: str) -> list[dict]:
     return slack("conversations.replies", query={"channel": CHANNEL, "ts": thread_ts, "limit": 50}).get("messages", [])
 
 
+def _blocks(msg: dict) -> list:
+    """메시지의 블록 전부. 색 띠(attachments) 안의 블록도 포함한다."""
+    inner = [b for a in msg.get("attachments") or [] for b in a.get("blocks") or []]
+    return list(msg.get("blocks") or []) + inner
+
+
 def click(thread_ts: str, action_id: str) -> None:
     for msg in reversed(replies(thread_ts)):
-        for block in msg.get("blocks", []):
+        for block in _blocks(msg):
             if block.get("type") != "actions":
                 continue
             for el in block["elements"]:
                 if el.get("action_id") == action_id:
                     payload = {"type": "block_actions", "user": {"id": USER}, "channel": {"id": CHANNEL},
-                               "message": {"ts": msg["ts"], "text": msg.get("text", ""), "blocks": msg["blocks"]},
+                               "message": {"ts": msg["ts"], "text": msg.get("text", ""), "blocks": msg.get("blocks") or [],
+                                           "attachments": msg.get("attachments") or []},
                                "actions": [{"action_id": action_id, "value": el["value"], "type": "button"}]}
                     body = urllib.parse.urlencode({"payload": json.dumps(payload)}).encode()
                     print("webhook:", send_signed("/slack/actions", body, "application/x-www-form-urlencoded"))
@@ -81,12 +88,27 @@ def click(thread_ts: str, action_id: str) -> None:
 
 def show(thread_ts: str) -> None:
     for msg in replies(thread_ts):
-        buttons = [e["text"]["text"] for b in msg.get("blocks", []) if b.get("type") == "actions" for e in b["elements"]]
-        text = next((b["text"]["text"] for b in msg.get("blocks", []) if b.get("type") == "section"), msg.get("text", ""))
         print("─" * 60)
-        print(text)
-        if buttons:
-            print("  [버튼]", " | ".join(buttons))
+        blocks = _blocks(msg)
+        if not blocks:
+            print(msg.get("text", ""))
+        for b in blocks:
+            kind = b.get("type")
+            if kind == "header":
+                print("[큰 제목]", b["text"]["text"])
+            elif kind == "section" and b.get("fields"):
+                print("[표]", " | ".join(f["text"].replace(chr(10), " = ", 1).replace(chr(10), " ") for f in b["fields"]))
+            elif kind == "section":
+                print(b["text"]["text"])
+            elif kind == "divider":
+                print("- - -")
+            elif kind == "context":
+                print("[작은 글씨]", " ".join(e.get("text", "") for e in b["elements"]))
+            elif kind == "actions":
+                print("[버튼]", " | ".join(e["text"]["text"] for e in b["elements"]))
+        colors = [a.get("color") for a in msg.get("attachments") or [] if a.get("color")]
+        if colors:
+            print("[띠 색]", ", ".join(colors))
 
 
 if __name__ == "__main__":

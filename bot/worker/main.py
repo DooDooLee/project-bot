@@ -91,9 +91,17 @@ async def on_action(ctx, payload: dict) -> None:
     }
     # 누른 메시지에서 버튼만 떼고, 누가 무엇을 골랐는지 작은 글씨로 남긴다. 본문은 그대로 둔다
     if channel and message.get("ts"):
-        kept = [b for b in message.get("blocks", []) if b.get("type") != "actions"]
-        kept.append(slack_ui.context(f"<@{user}> 님이 *{labels.get(action_id, action_id)}* 선택"))
-        await slack_client.update_message(channel, message["ts"], message.get("text", ""), blocks=kept)
+        chosen = slack_ui.context(f"<@{user}> 님이 *{labels.get(action_id, action_id)}* 선택")
+        cards = message.get("attachments") or []
+        if cards and cards[0].get("blocks"):
+            # 색 띠가 있는 메시지는 버튼이 attachments 안에 있다
+            kept = [b for b in cards[0]["blocks"] if b.get("type") != "actions"] + [chosen]
+            color = "#" + str(cards[0].get("color") or "888780").lstrip("#")
+            await slack_client.update_message(channel, message["ts"], message.get("text", ""), blocks=message.get("blocks") or [],
+                                              attachments=[{"color": color, "blocks": kept}])
+        else:
+            kept = [b for b in message.get("blocks", []) if b.get("type") != "actions"] + [chosen]
+            await slack_client.update_message(channel, message["ts"], message.get("text", ""), blocks=kept)
     handler = {
         "analyze_error": analyze_error,
         "ask_question": ask_question,
@@ -149,11 +157,13 @@ async def analyze_error(ctx, job_id: int, build_log: str = "") -> None:
                 incidents=state.get("incidents", []),
                 usage=usage.as_dict(), elapsed_seconds=elapsed,
             )
-        await progress.done(f"분석 완료  ·  {elapsed}초  ·  코드 {len(state.get('code', []))}개 확인")
-        text, blocks = slack_ui.report_blocks(result, state, job_id)
-        await slack_client.post_message(channel, text, thread_ts=thread, blocks=blocks)
+        # 진행 메시지는 지우고 결과 하나만 남긴다 (새 글로 올려야 스레드 알림이 간다)
+        await progress.remove()
+        text, attachments = slack_ui.report_message(result, state, job_id, elapsed)
+        await slack_client.post_message(channel, text, thread_ts=thread, attachments=attachments)
     except Exception as e:
         log.exception("analyze_error failed job=%s", job_id)
+        await progress.remove()
         with store.connect() as conn:
             jobs.update_job(conn, job_id, "failed", error=str(e)[:500])
         await slack_client.post_message(
