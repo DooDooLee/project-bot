@@ -386,8 +386,8 @@ async def finish(ctx, job, project, root, branch, fix, changed, history, usage, 
             jobs.set_incident_pr(conn, job["state"]["incident_id"], pr_url)
     attempts = max(h["attempt"] for h in history)
     await progress.done(f"*AI 수정 완료*  ·  {elapsed}초")
-    text, attachments = slack_ui.fix_result_message(job_id, fix, {
+    text, blocks = slack_ui.fix_result_message(job_id, fix, {
         "elapsed": elapsed, "attempts": attempts, "before": before_number, "after": build_number,
         "changed": changed, "apis": apis, "pr_url": pr_url, "branch": branch,
     })
-    await slack_client.post_message(job["slack_channel"], text, thread_ts=job["slack_ts"], attachments=attachments)
+    await slack_client.post_message(job["slack_channel"], text, thread_ts=job["slack_ts"], blocks=blocks)

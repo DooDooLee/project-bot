@@ -1,7 +1,8 @@
 """Slack에 올리는 메시지의 모양. 한눈에 읽히도록 만든다.
 
-- 결과 메시지는 큰 제목 한 줄(결론) → 두 칸 표(종류, 확신, 위치) → 짧은 항목 → 버튼 → 작은 글씨 순서다.
-- 왼쪽 색 띠로 종류를 알린다 (코드 = 빨강, 수정 완료 = 초록 등).
+- 결과 메시지는 큰 제목 한 줄(결론) → 이름과 값(종류, 신뢰도, 위치) → 짧은 항목 → 버튼 → 작은 글씨 순서다.
+- 제목 앞 동그라미 색으로 종류를 알린다 (코드 = 빨강, 수정 완료 = 초록 등).
+- 색 띠(attachments)는 한두 줄짜리 알림에만 쓴다. 긴 내용을 넣으면 Slack이 "더 보기"로 접어 버튼이 가려진다.
 - 진행 상황은 메시지 하나를 고쳐 쓰고, 결과가 나오면 그 메시지를 지워 결과 하나만 남긴다.
 - 근거는 [근거 보기]를 눌렀을 때만 올린다.
 """
@@ -118,6 +119,11 @@ class Progress:
             self.ts = None
 
 
+def pairs_text(*pairs: tuple[str, str]) -> str:
+    """이름과 값을 한 줄에 나란히. 스레드 창이 좁아도 이름과 값이 떨어지지 않는다."""
+    return "\n".join(f"*{k}*  {v}" for k, v in pairs if v)
+
+
 def location(result: dict) -> str:
     path = result.get("file_path")
     if not path:
@@ -125,22 +131,22 @@ def location(result: dict) -> str:
     name = path.rsplit("/", 1)[-1]
     where = f"`{name}" + (f":{result['line']}" if result.get("line") else "") + "`"
     symbol = clean(result.get("symbol"))
-    return where + (f"\n{symbol}" if symbol else "")
+    return where + (f" {symbol}" if symbol else "")
 
 
 def report_message(result: dict, state: dict, job_id: int, elapsed: float | None = None) -> tuple[str, list]:
-    """원인 분석 결과. (알림에 쓰는 한 줄, attachments)"""
+    """원인 분석 결과. (알림에 쓰는 한 줄, blocks)"""
     kind = result.get("cause_type") if result.get("cause_type") in CAUSE_TYPES else "unknown"
     title = short(result.get("title") or result.get("symptom"), 80)
     blocks: list = [slack_client.header(f"{MARKS[kind]} {title}")]
 
     incidents = state.get("incidents") or []
-    pairs = [("원인 종류", CAUSE_TYPES[kind]), ("확신", CONFIDENCE.get(result.get("confidence"), "-"))]
-    if location(result):
-        pairs.append(("위치", location(result)))
-    if incidents:
-        pairs.append(("비슷한 과거 장애", f"{len(incidents)}건"))
-    blocks.append(slack_client.fields(*pairs))
+    blocks.append(slack_client.section(pairs_text(
+        ("원인 종류", CAUSE_TYPES[kind]),
+        ("신뢰도", CONFIDENCE.get(result.get("confidence"), "-")),
+        ("위치", location(result)),
+        ("비슷한 과거 장애", f"{len(incidents)}건" if incidents else ""),
+    )))
 
     points = result.get("points") or _sentences(result.get("cause"))[:3]
     if points:
@@ -162,7 +168,7 @@ def report_message(result: dict, state: dict, job_id: int, elapsed: float | None
     code = state.get("code") or []
     if elapsed or code:
         blocks.append(context(f"{elapsed}초" if elapsed else "", f"코드 {len(code)}개 확인" if code else ""))
-    return f"{title} ({CAUSE_TYPES[kind]})", card(kind, blocks)
+    return f"{title} ({CAUSE_TYPES[kind]})", blocks
 
 
 def evidence_text(state: dict) -> str:
@@ -197,23 +203,20 @@ def evidence_text(state: dict) -> str:
 def fix_result_message(job_id: int, fix: dict, summary: dict) -> tuple[str, list]:
     """AI 수정 결과. summary: elapsed, attempts, before, after, changed, apis, pr_url, branch"""
     blocks: list = [slack_client.header(f"{MARKS['done']} 수정 완료")]
-    files = "\n".join(f"`{c.rsplit('/', 1)[-1]}`" for c in summary["changed"][:5])
-    pairs = [
-        ("검증", f"수정 전 실패 #{summary['before']}\n수정 후 통과 #{summary['after']}"),
-        ("바뀐 파일", files or "-"),
-    ]
-    if summary["apis"]:
-        pairs.append(("영향받는 API", "\n".join(f"`{a}`" for a in summary["apis"][:3])))
-    blocks.append(slack_client.fields(*pairs))
+    blocks.append(slack_client.section(pairs_text(
+        ("검증", f"수정 전 실패 #{summary['before']} → 수정 후 통과 #{summary['after']}"),
+        ("바뀐 파일", ", ".join(f"`{c.rsplit('/', 1)[-1]}`" for c in summary["changed"][:5])),
+        ("영향받는 API", ", ".join(f"`{a}`" for a in summary["apis"][:3])),
+        ("PR", summary.get("pr_url") or ""),
+        ("브랜치", "" if summary.get("pr_url") else f"`{summary['branch']}`"),
+    )))
     blocks.append(slack_client.section(f"*바꾼 내용*\n{short(fix.get('explanation'), 300)}"))
-    blocks.append(slack_client.divider())
     if summary.get("pr_url"):
-        blocks.append(slack_client.section(f"*PR*  {summary['pr_url']}\n확인하고 merge하면 해결로 기록합니다."))
+        blocks.append(context("PR을 확인하고 merge하면 해결로 기록합니다."))
     else:
-        blocks.append(slack_client.section(f"*브랜치*  `{summary['branch']}`"))
         blocks.append(slack_client.buttons(("해결됨", "mark_resolved", str(job_id))))
     blocks.append(context(f"{summary['elapsed']}초", f"{summary['attempts']}번째 시도에 통과" if summary["attempts"] > 1 else ""))
-    return f"수정 완료 ({summary['elapsed']}초)", card("done", blocks)
+    return f"수정 완료 ({summary['elapsed']}초)", blocks
 
 
 def answer_message(text: str, elapsed: float, tools: str) -> tuple[str, list]:
