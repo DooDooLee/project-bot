@@ -137,9 +137,8 @@ async def handle(ctx, payload: dict) -> None:
                  "reported_at_ns": time.time_ns(), "commit": payload.get("commit"), "stage": stage},
             )
         if previous:
-            text = (f"같은 커밋(`{commit}`)이 같은 단계에서 이미 실패한 적이 있어 이전 분석을 다시 보여 드립니다.\n"
-                    f"*원인*  {previous['cause']}\n*조치*  {previous['resolution'] or '-'}")
-            await slack_client.post_message(channel, text, thread_ts=thread, blocks=[slack_client.section(text)])
+            text, blocks = slack_ui.repeated_failure_message(commit, previous)
+            await slack_client.post_message(channel, text, thread_ts=thread, blocks=blocks)
             return
         from bot.worker.main import analyze_error
 

@@ -165,8 +165,8 @@ async def show_evidence(ctx, job_id: int) -> None:
     """[근거 보기]: 근거, 확인한 코드, 서버 로그, 비슷한 과거 장애를 스레드에 올린다."""
     with store.connect() as conn:
         job = jobs.get_job(conn, job_id)
-    text = slack_ui.evidence_text(job["state"])
-    await slack_client.post_message(job["slack_channel"], text, thread_ts=job["slack_ts"], blocks=[slack_client.section(text)])
+    text, blocks = slack_ui.evidence_message(job["state"])
+    await slack_client.post_message(job["slack_channel"], text, thread_ts=job["slack_ts"], blocks=blocks)
 
 
 async def analyze_error(ctx, job_id: int, build_log: str = "") -> None:
@@ -215,10 +215,8 @@ async def analyze_error(ctx, job_id: int, build_log: str = "") -> None:
         await progress.remove()
         with store.connect() as conn:
             jobs.update_job(conn, job_id, "failed", error=str(e)[:500])
-        await slack_client.post_message(
-            channel, f"분석 중 오류가 났습니다: `{str(e)[:200]}`", thread_ts=thread,
-            blocks=[slack_client.section(f"분석 중 오류가 났습니다: `{str(e)[:200]}`"), slack_client.buttons(("다시 시도", "analyze_error", str(job_id)))],
-        )
+        text, blocks = slack_ui.problem_message("분석", e, ("다시 시도", "analyze_error", str(job_id)))
+        await slack_client.post_message(channel, text, thread_ts=thread, blocks=blocks)
 
 
 async def ask_question(ctx, job_id: int) -> None:
@@ -239,17 +237,8 @@ async def fix_manually(ctx, job_id: int) -> None:
         job = jobs.get_job(conn, job_id)
     result = job["state"].get("result") or {}
     code = job["state"].get("code") or []
-    where = slack_ui.location(result).replace("`", "")
-    summary = (
-        "*직접 수정용 요약*  아래를 로컬 AI 도구에 붙여 넣으세요.\n```\n"
-        f"증상: {slack_ui.clean(result.get('symptom'))}\n원인: {slack_ui.clean(result.get('cause'))}\n"
-        f"위치: {where}\n수정 방향: {slack_ui.clean(result.get('fix'))}\n"
-        "관련 코드:\n" + "\n".join(f"- {c['name']} ({c['file_path']}:{c['start_line']})" for c in code[:6]) + "\n```"
-    )
-    await slack_client.post_message(
-        job["slack_channel"], summary, thread_ts=job["slack_ts"],
-        blocks=[slack_client.section(summary), slack_client.buttons(("해결됨", "mark_resolved", str(job_id)))],
-    )
+    text, blocks = slack_ui.manual_fix_message(job_id, result, code)
+    await slack_client.post_message(job["slack_channel"], text, thread_ts=job["slack_ts"], blocks=blocks)
 
 
 async def mark_resolved(ctx, job_id: int) -> None:

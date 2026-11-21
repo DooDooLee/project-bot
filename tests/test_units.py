@@ -328,7 +328,7 @@ def test_report_message_shows_conclusion_first():
     }
     state = {"incidents": [{"symptom": "x"}], "code": [{"name": "a"}, {"name": "b"}]}
     text, blocks = slack_ui.report_message(result, state, 7, 14.4)
-    assert [b["type"] for b in blocks] == ["header", "section", "section", "divider", "section", "actions", "context"]
+    assert [b["type"] for b in blocks] == ["header", "section", "divider", "section", "divider", "section", "actions", "context"]
     # 맨 위 큰 글씨가 결론이고, 앞의 동그라미 색으로 종류를 알린다 (코드 문제 = 빨강)
     assert blocks[0]["text"]["text"] == "🔴 라우터에 없는 주소를 받는 경로가 없음"
     # 이름과 값은 한 줄에 나란히 (스레드 창이 좁아도 떨어지지 않게)
@@ -336,15 +336,55 @@ def test_report_message_shows_conclusion_first():
         "*원인 종류:*  `코드`", "*신뢰도:*  `높음`", "*위치:*  `App.jsx:86` AppContent", "*비슷한 과거 장애:*  `1건`",
     ]
     # 원인은 짧은 항목으로, 따옴표 앞 역슬래시는 없앤다
-    assert blocks[2]["text"]["text"] == '*원인*\n• <Routes>에 path="*" 라우트 없음\n• 없는 주소에서 아무것도 그리지 않음'
-    assert blocks[4]["text"]["text"].startswith("*수정 방향*\n맨 끝에")
-    assert [e["action_id"] for e in blocks[5]["elements"]] == ["fix_with_ai", "fix_manually", "show_evidence"]
-    assert blocks[6]["elements"][0]["text"] == "14.4초  ·  코드 2개 확인"
+    assert blocks[3]["text"]["text"] == '*원인*\n• <Routes>에 path="*" 라우트 없음\n• 없는 주소에서 아무것도 그리지 않음'
+    assert blocks[5]["text"]["text"].startswith("*수정 방향*\n맨 끝에")
+    assert [e["action_id"] for e in blocks[6]["elements"]] == ["fix_with_ai", "fix_manually", "show_evidence"]
+    assert blocks[7]["elements"][0]["text"] == "14.4초  ·  코드 2개 확인"
     assert text == "라우터에 없는 주소를 받는 경로가 없음 (코드)"
     # 근거는 본문에 없고 [근거 보기]를 눌렀을 때 나온다
     assert "Loki ERROR 로그 없음" not in str(blocks)
-    shown = slack_ui.evidence_text({"result": result, "code": [{"name": "App.jsx#AppContent", "file_path": "frontend/src/App.jsx", "start_line": 40}], "elapsed_seconds": 14.5})
-    assert "Loki ERROR 로그 없음" in shown and "App.jsx#AppContent" in shown and "14.5초" in shown
+    _, shown = slack_ui.evidence_message({"result": result, "code": [{"name": "App.jsx#AppContent", "file_path": "frontend/src/App.jsx", "start_line": 40}], "elapsed_seconds": 14.5})
+    assert "Loki ERROR 로그 없음" in str(shown) and "App.jsx#AppContent" in str(shown) and "14.5초" in str(shown)
+
+
+def test_evidence_message_is_split_into_sections():
+    """[근거 보기]는 덩어리마다 구분선으로 나누고, 라벨은 윗줄에 따로 쓴다."""
+    state = {
+        "result": {"symptom": "없는 아이템 구매 시 401", "cause": "/error 가 인증에 걸려 401로 바뀐다.", "evidence": ["anyRequest().authenticated()", "ERROR 로그 없음"]},
+        "code": [{"name": "SecurityConfig#filterChain(HttpSecurity)", "file_path": "backend/src/main/java/com/example/app/global/config/SecurityConfig.java", "start_line": 36}],
+        "logs": [{"service": "backend", "time": "05:10:22", "line": "ERROR boom\n  at x"}],
+        "incidents": [{"created_at": "2026-11-21T05:16", "symptom": "구매 401", "resolution": "예외 처리기 추가"}],
+        "elapsed_seconds": 17.4, "usage": {"input_tokens": 5007, "output_tokens": 1981},
+    }
+    text, blocks = slack_ui.evidence_message(state)
+    kinds = [b["type"] for b in blocks]
+    # 큰 제목 아래로 덩어리 6개가 구분선으로 나뉘고, 숫자는 맨 아래 작은 글씨로
+    assert kinds == ["header"] + ["section", "divider"] * 5 + ["section", "context"] and text == "분석 근거"
+    bodies = [b["text"]["text"] for b in blocks if b["type"] == "section"]
+    assert bodies[0] == "*증상*\n없는 아이템 구매 시 401"  # 라벨과 내용이 다른 줄
+    assert bodies[1].startswith("*원인 설명*\n") and bodies[2] == "*근거*\n• anyRequest().authenticated()\n• ERROR 로그 없음"
+    # 긴 경로 대신 파일 이름과 줄 번호만
+    assert bodies[3] == "*확인한 코드 1개*\n• `SecurityConfig#filterChain(HttpSecurity)`  ·  SecurityConfig.java:36"
+    assert bodies[4] == "*서버 로그*\n• `backend 05:10:22`  ERROR boom"
+    assert bodies[5] == "*비슷한 과거 장애*\n• `2026-11-21`  구매 401\n   → 예외 처리기 추가"
+    assert blocks[-1]["elements"][0]["text"] == "분석 17.4초  ·  입력 토큰 5,007  ·  출력 토큰 1,981"
+    assert slack_ui.evidence_message({})[0] == "남아 있는 근거가 없습니다."
+
+
+def test_other_messages_follow_same_shape():
+    result = {"symptom": "s", "cause": "c", "file_path": "a/B.java", "line": 3, "symbol": "m", "fix": "f"}
+    _, manual = slack_ui.manual_fix_message(4, result, [{"name": "B#m", "file_path": "a/B.java", "start_line": 3}])
+    assert [b["type"] for b in manual] == ["header", "context", "section", "actions"]
+    assert manual[2]["text"]["text"] == "```\n증상: s\n원인: c\n위치: a/B.java:3 (m)\n수정 방향: f\n관련 코드:\n- B#m (a/B.java:3)\n```"
+    _, failed = slack_ui.fix_failed_message(4, 3, "bot/fix-4")
+    assert failed[0]["text"]["text"] == "🔴 자동 수정 실패" and failed[1]["text"]["text"] == "*시도:*  `3번`\n*마지막 시도:*  `bot/fix-4`"
+    assert failed[-1]["elements"][0]["action_id"] == "fix_manually"
+    text, problem = slack_ui.problem_message("분석", ValueError("boom"), ("다시 시도", "analyze_error", "4"))
+    assert text == "분석 중 오류가 났습니다" and problem[1]["text"]["text"] == "```\nboom\n```" and problem[2]["elements"][0]["value"] == "4"
+    assert len(slack_ui.problem_message("답변", "x")[1]) == 2  # 다시 시도할 것이 없으면 버튼도 없다
+    _, again = slack_ui.repeated_failure_message("04e7c8d", {"cause": "JRE에 디버그 에이전트가 없음", "resolution": None})
+    assert [b["type"] for b in again] == ["header", "context", "section", "divider", "section"]
+    assert again[2]["text"]["text"] == "*원인*\nJRE에 디버그 에이전트가 없음" and again[4]["text"]["text"] == "*조치*\n-"
 
 
 def test_report_message_for_non_code_cause():
@@ -365,20 +405,20 @@ def test_report_message_reads_old_results_and_unknown_cause():
               "cause": "ERROR 로그가 없습니다. 신고된 주소가 코드와 다릅니다.", "action": "1. 응답 본문 확인\n2. WARN 로그 조회"}
     _, blocks = slack_ui.report_message(result, {}, 5)
     assert blocks[0]["text"]["text"].startswith("⚪ ")
-    assert blocks[2]["text"]["text"] == "*확인한 것*\n• ERROR 로그가 없습니다.\n• 신고된 주소가 코드와 다릅니다."
-    assert blocks[4]["text"]["text"] == "*다음 할 일*\n1. 응답 본문 확인\n2. WARN 로그 조회"
+    assert blocks[3]["text"]["text"] == "*확인한 것*\n• ERROR 로그가 없습니다.\n• 신고된 주소가 코드와 다릅니다."
+    assert blocks[5]["text"]["text"] == "*다음 할 일*\n1. 응답 본문 확인\n2. WARN 로그 조회"
 
 
 def test_fix_result_message():
     summary = {"elapsed": 77, "attempts": 1, "before": 5, "after": 6, "changed": ["frontend/src/pages/NotFoundPage.jsx", "frontend/src/App.jsx"],
                "apis": [], "pr_url": "", "branch": "bot/fix-14"}
     text, blocks = slack_ui.fix_result_message(14, {"explanation": "NotFoundPage를 만들고 catch-all 라우트로 연결했습니다."}, summary)
-    assert [b["type"] for b in blocks] == ["header", "section", "section", "actions", "context"]
+    assert [b["type"] for b in blocks] == ["header", "section", "divider", "section", "actions", "context"]
     assert blocks[0]["text"]["text"] == "🟢 수정 완료"
     assert blocks[1]["text"]["text"].splitlines() == [
         "*검증:*  수정 전 실패 #5 → 수정 후 통과 #6", "*바뀐 파일:*  `NotFoundPage.jsx`, `App.jsx`", "*브랜치:*  `bot/fix-14`",
     ]
-    assert blocks[2]["text"]["text"].startswith("*바꾼 내용*\nNotFoundPage")
+    assert blocks[3]["text"]["text"].startswith("*바꾼 내용*\nNotFoundPage")
     assert blocks[-1]["elements"][0]["text"] == "77초" and text == "수정 완료 (77초)"
     # PR이 있으면 주소를 보여 주고, 해결 버튼은 두지 않는다 (merge되면 자동으로 해결 처리)
     _, with_pr = slack_ui.fix_result_message(14, {"explanation": "x"}, {**summary, "pr_url": "https://github.com/o/r/pull/1", "attempts": 2, "apis": ["GET /a"]})
@@ -392,6 +432,10 @@ def test_answer_message_and_notice():
     shown, blocks = slack_ui.answer_message("**에러 없음**", 7.9, "로그")
     assert shown == "*에러 없음*" and blocks[0]["text"]["text"] == "*에러 없음*"
     assert blocks[1]["elements"][0]["text"] == "7.9초  ·  로그"
+    # 첫 문단(결론)과 나머지 묶음을 구분선으로 나눈다
+    _, long = slack_ui.answer_message("배포는 성공했습니다.\n\n*마지막 빌드*\n• 06:32 종료\n\n*커밋*\n• a1b2c3", 4.4, "빌드 로그")
+    assert [b["type"] for b in long] == ["section", "divider", "section", "section", "context"]
+    assert long[0]["text"]["text"] == "배포는 성공했습니다." and long[2]["text"]["text"] == "*마지막 빌드*\n• 06:32 종료"
     # 색 띠는 한두 줄짜리 알림에만 쓴다
     assert slack_ui.notice("failed", "*배포 실패 #4*") == [{"color": slack_ui.COLORS["failed"], "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": "*배포 실패 #4*"}}]}]
 
@@ -496,6 +540,12 @@ def test_mention_starts_without_buttons(monkeypatch, intent, expected):
 def test_to_mrkdwn():
     assert slack_ui.to_mrkdwn("**에러는 없습니다.** 9건\n## 요약\n• a") == "*에러는 없습니다.* 9건\n*요약*\n• a"
     assert slack_ui.to_mrkdwn("이미 *굵게* 인 글") == "이미 *굵게* 인 글"
+    # 별표가 글자에 바로 붙으면 Slack이 굵게 그리지 않고 별표를 보여 주므로 뗀다
+    assert slack_ui.to_mrkdwn("*주문 만들기*는 되고, 배포는*성공*했습니다.") == "주문 만들기는 되고, 배포는성공했습니다."
+    # 라벨과 목록의 굵게, 코드 속 별표는 그대로 둔다
+    keep = '*라벨*\n• *프론트*: `path="*"` 라우트 *강조* 끝'
+    assert slack_ui.to_mrkdwn(keep) == keep
+    assert slack_ui.to_mrkdwn("*라벨* 설명 *강조*는 뗀다") == "*라벨* 설명 강조는 뗀다"
 
 
 def test_color_bar_message_is_shown_once():

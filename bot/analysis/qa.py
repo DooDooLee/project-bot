@@ -115,10 +115,16 @@ SYSTEM = """너는 개발팀의 프로젝트 봇이다. 팀원이 Slack에서 �
 
 규칙
 - 도구로 확인한 내용만 답한다. 확인하지 못했으면 모른다고 말한다.
-- 쉬운 한국어로 짧게 답한다. 첫 줄에 결론을 쓰고, 그 아래는 8줄을 넘기지 않는다.
-- 확인 과정이나 확인하지 못한 세부는 길게 늘어놓지 않는다. 꼭 필요하면 마지막에 한 줄로만 쓴다.
-- 코드 위치는 파일 경로와 메서드 이름을 그대로 적는다.
-- Slack 메시지로 나가므로 *굵게*, `코드`, • 목록만 쓰고 표나 # 제목은 쓰지 않는다.
+- 쉬운 한국어로 짧게 답한다. 확인 과정이나 확인하지 못한 세부는 길게 늘어놓지 않는다. 꼭 필요하면 마지막에 한 줄로만 쓴다.
+- 코드 위치는 파일 이름과 메서드 이름으로 적는다 (예: `OrderService.java`의 `create`). 폴더 경로 전체는 적지 않는다.
+
+모양 (Slack 메시지로 나간다)
+- 첫 문단은 결론 한두 문장이다. 꾸미지 않는다.
+- 그 아래는 묶음으로 나눈다. 묶음은 2~3개를 넘기지 않고, 묶음 사이에는 빈 줄을 하나 둔다.
+- 묶음마다 윗줄에 *라벨*만 따로 쓰고, 아랫줄부터 • 목록을 쓴다. 한 묶음의 목록은 5줄을 넘기지 않는다.
+- 굵게(*…*)는 라벨 줄에만 쓴다. 문장 중간의 단어는 굵게 하지 않는다.
+- 목록 안에 목록을 넣지 않는다. 한 항목은 한 줄로 쓴다.
+- `코드`와 • 목록만 쓰고 표, # 제목, 번호 목록은 쓰지 않는다.
 - 지금 시각: {now} (한국 시간)"""
 
 
@@ -304,4 +310,5 @@ async def answer(ctx, job_id: int, intent: str | None = None, question: str | No
         await slack_client.post_message(channel, shown, thread_ts=thread, blocks=blocks)
     except Exception as e:
         log.exception("qa failed job=%s", job_id)
-        await slack_client.post_message(channel, f"답하는 중 오류가 났습니다: `{str(e)[:200]}`", thread_ts=thread)
+        text, blocks = slack_ui.problem_message("답변", e)
+        await slack_client.post_message(channel, text, thread_ts=thread, blocks=blocks)
