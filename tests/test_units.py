@@ -378,5 +378,52 @@ def test_empty_mention_is_not_accepted(monkeypatch):
     monkeypatch.setattr(worker.slack_client, "post_message", fake_post)
     monkeypatch.setattr(worker.store, "connect", no_db)
     asyncio.run(worker.on_mention({}, {"channel": "C1", "ts": "1.2", "text": "<@U0BOT>  "}))
-    assert len(posted) == 1 and posted[0][1] == worker.EMPTY_MENTION
+    assert len(posted) == 1 and posted[0][1] == worker.empty_mention_text("<@U0BOT>")
+    assert "<@U0BOT> " in posted[0][1]  # 안내의 예시는 실제 봇 멘션으로 보여 준다
     assert "actions" not in [b["type"] for b in posted[0][2]["blocks"]]
+
+
+@pytest.mark.parametrize("intent,expected", [("error", "analyze"), ("question", "answer"), ("out_of_scope", "answer")])
+def test_mention_starts_without_buttons(monkeypatch, intent, expected):
+    """내용을 적어 부르면 버튼 없이, 글의 종류에 맞는 작업을 바로 시작한다."""
+    import asyncio
+    from contextlib import contextmanager
+
+    from bot.analysis import qa
+    from bot.worker import main as worker
+
+    calls, posted = [], []
+
+    @contextmanager
+    def fake_conn():
+        yield object()
+
+    async def fake_classify(text, usage=None):
+        return intent
+
+    async def fake_analyze(ctx, job_id, build_log=""):
+        calls.append(("analyze", job_id))
+
+    async def fake_answer(ctx, job_id, intent=None):
+        calls.append(("answer", job_id, intent))
+
+    async def fake_post(*args, **kwargs):
+        posted.append(args)
+        return {"ts": "1.0"}
+
+    monkeypatch.setattr(worker.store, "connect", fake_conn)
+    monkeypatch.setattr(worker.jobs, "upsert_job", lambda conn, kind, channel, thread, state: {"id": 7, "state": state})
+    monkeypatch.setattr(qa, "classify", fake_classify)
+    monkeypatch.setattr(qa, "answer", fake_answer)
+    monkeypatch.setattr(worker, "analyze_error", fake_analyze)
+    monkeypatch.setattr(worker.slack_client, "post_message", fake_post)
+    asyncio.run(worker.on_mention({}, {"channel": "C1", "ts": "1.2", "text": "<@U0BOT> 최근 에러 로그 보여 줘"}))
+    assert [c[0] for c in calls] == [expected] and calls[0][1] == 7
+    assert posted == []  # 접수 메시지와 버튼을 올리지 않는다
+    if expected == "answer":
+        assert calls[0][2] == intent  # 이미 가린 종류를 넘겨서 두 번 묻지 않는다
+
+
+def test_to_mrkdwn():
+    assert slack_ui.to_mrkdwn("**에러는 없습니다.** 9건\n## 요약\n• a") == "*에러는 없습니다.* 9건\n*요약*\n• a"
+    assert slack_ui.to_mrkdwn("이미 *굵게* 인 글") == "이미 *굵게* 인 글"

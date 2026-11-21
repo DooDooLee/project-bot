@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+import re
+
 from bot import slack_client
 
 CAUSE_TYPES = {"code": "코드", "config": "서버 설정", "infra": "인프라", "external": "외부 서비스", "unknown": "판단 불가"}
@@ -14,6 +16,12 @@ CONFIDENCE = {"high": "높음", "medium": "보통", "low": "낮음"}
 def clean(text) -> str:
     """LLM 출력에 섞여 나오는 따옴표 앞의 역슬래시를 없애고 앞뒤 공백을 정리한다."""
     return str(text or "").replace('\\"', '"').replace("\\'", "'").strip()
+
+
+def to_mrkdwn(text) -> str:
+    """LLM이 쓴 Markdown을 Slack 표기로 바꾼다. Slack은 굵게를 *한 겹*으로 쓰고 제목(#) 문법이 없다."""
+    text = re.sub(r"\*\*(.+?)\*\*", r"*\1*", clean(text))
+    return re.sub(r"(?m)^#{1,6}\s+(.+)$", r"*\1*", text)
 
 
 def short(text, limit: int = 140) -> str:

@@ -20,17 +20,21 @@ def _thread(event: dict) -> str:
     return event.get("thread_ts") or event["ts"]
 
 
-EMPTY_MENTION = (
-    "내용을 함께 적어서 불러 주세요.\n"
-    "• 오류: `@프로젝트 봇 방 만들기를 누르면 500 에러가 나요` (에러 메시지나 로그를 붙여도 됩니다)\n"
-    "• 질문: `@프로젝트 봇 방 입장 API는 어디에 구현돼 있어?`\n"
-    "에러를 올린 글의 스레드에서 부르면 그 글을 함께 읽습니다."
-)
+def empty_mention_text(mention: str) -> str:
+    """내용 없이 불렀을 때의 안내. mention 은 Slack이 봇 이름으로 바꿔 보여 주는 <@U…> 글자다."""
+    return (
+        "내용을 함께 적어서 불러 주세요. 버튼 없이 바로 시작합니다.\n"
+        f"• 오류 신고: {mention} 결제 버튼을 누르면 500 에러가 나요\n"
+        f"• 질문·조회: {mention} 최근 30분 에러 로그 보여 줘\n"
+        "에러를 올린 글의 스레드에서 부르면 그 글을 함께 읽습니다."
+    )
 
 
 async def on_mention(ctx, event: dict) -> None:
-    """멘션을 받으면 스레드에 접수 메시지와 버튼 두 개를 올린다."""
+    """멘션을 받으면 글을 읽고 오류 신고인지 질문인지 가려서 바로 시작한다."""
     channel, thread = event["channel"], _thread(event)
+    found = _MENTION.search(event.get("text", ""))
+    mention = found.group(0) if found else "@봇"
     text = _MENTION.sub("", event.get("text", "")).strip()
     if event.get("thread_ts") and event["thread_ts"] != event["ts"]:
         # 스레드 안에서 멘션했으면 첫 메시지(에러를 붙여 넣은 글)도 함께 본다
@@ -39,20 +43,31 @@ async def on_mention(ctx, event: dict) -> None:
         text = (parent + "\n" + text).strip()
     if not text:
         # 내용 없이 봇만 불렀으면 접수하지 않고 쓰는 법을 알려 준다
-        await slack_client.post_message(channel, EMPTY_MENTION, thread_ts=thread, blocks=[slack_client.section(EMPTY_MENTION)])
+        guide = empty_mention_text(mention)
+        await slack_client.post_message(channel, guide, thread_ts=thread, blocks=[slack_client.section(guide)])
         return
     with store.connect() as conn:
         job = jobs.upsert_job(conn, "report", channel, thread, {"report": text, "reported_at_ns": time.time_ns(), "user": event.get("user")})
-    job_id = str(job["id"])
-    await slack_client.post_message(
-        channel,
-        "접수했습니다. 무엇을 할까요?",
-        thread_ts=thread,
-        blocks=[
-            slack_client.section("접수했습니다. 무엇을 할까요?"),
-            slack_client.buttons(("오류 분석", "analyze_error", job_id), ("질문·조회", "ask_question", job_id)),
-        ],
-    )
+    from bot.analysis import qa
+
+    try:
+        intent = await qa.classify(text)
+    except Exception:
+        # 종류를 가리지 못했으면 사람이 고르게 한다
+        log.exception("메시지 종류를 가리지 못함")
+        job_id = str(job["id"])
+        await slack_client.post_message(
+            channel, "어떤 요청인지 골라 주세요.", thread_ts=thread,
+            blocks=[
+                slack_client.section("어떤 요청인지 골라 주세요."),
+                slack_client.buttons(("오류 분석", "analyze_error", job_id), ("질문·조회", "ask_question", job_id)),
+            ],
+        )
+        return
+    if intent == "error":
+        await analyze_error(ctx, job["id"])
+    else:
+        await qa.answer(ctx, job["id"], intent=intent)
 
 
 async def on_action(ctx, payload: dict) -> None:

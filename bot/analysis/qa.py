@@ -12,7 +12,7 @@ import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from bot import code_cache, embedding, llm, search, slack_client
+from bot import code_cache, embedding, llm, search, slack_client, slack_ui
 from bot.db import jobs, store
 from bot.tools import jenkins, logs, metrics
 
@@ -217,12 +217,26 @@ def build_handlers(ctx) -> dict:
 
 INTENT_SCHEMA = {
     "type": "object",
-    "properties": {"intent": {"type": "string", "enum": ["project", "out_of_scope"], "description": "project: 이 프로젝트의 코드, 로그, 지표, 배포, 장애, 문서에 대한 질문. out_of_scope: 그 밖의 모든 것"}},
+    "properties": {"intent": {"type": "string", "enum": ["error", "question", "out_of_scope"], "description": (
+        "error: 무언가 고장 났거나 잘못 동작한다는 신고. 증상, 에러 메시지, 스택 트레이스가 적혀 있고 원인을 찾아야 한다. "
+        "question: 정보를 달라는 요청. 코드 위치나 동작 방식 설명, 로그·지표·배포 기록·장애 기록 조회 "
+        "('최근 에러 로그 보여 줘'처럼 에러라는 단어가 있어도 보여 달라는 요청이면 question). "
+        "out_of_scope: 이 프로젝트의 코드, 로그, 지표, 배포, 장애, 문서와 무관한 것"
+    )}},
     "required": ["intent"],
 }
 
 
-async def answer(ctx, job_id: int) -> None:
+async def classify(text: str, usage: llm.Usage | None = None) -> str:
+    """메시지가 오류 신고(error)인지, 질문·조회(question)인지, 범위 밖(out_of_scope)인지 고른다."""
+    intent = await llm.structured(
+        llm.HAIKU, "팀원이 프로젝트 봇에게 보낸 메시지의 종류를 고른다.", text[:3000],
+        name="classify", description="메시지 종류를 기록한다", schema=INTENT_SCHEMA, max_tokens=100, usage=usage,
+    )
+    return intent.get("intent") or "question"
+
+
+async def answer(ctx, job_id: int, intent: str | None = None) -> None:
     with store.connect() as conn:
         job = jobs.get_job(conn, job_id)
     channel, thread = job["slack_channel"], job["slack_ts"]
@@ -233,11 +247,9 @@ async def answer(ctx, job_id: int) -> None:
     usage = llm.Usage()
     started = time.time()
     try:
-        intent = await llm.structured(
-            llm.HAIKU, "팀원이 프로젝트 봇에게 보낸 메시지의 종류를 고른다.", question[:3000],
-            name="classify", description="메시지 종류를 기록한다", schema=INTENT_SCHEMA, max_tokens=100, usage=usage,
-        )
-        if intent.get("intent") == "out_of_scope":
+        if intent is None:
+            intent = await classify(question, usage)
+        if intent == "out_of_scope":
             await slack_client.post_message(channel, OUT_OF_SCOPE, thread_ts=thread)
             return
         used: list[str] = []
@@ -261,7 +273,8 @@ async def answer(ctx, job_id: int) -> None:
             names = " · ".join(TOOL_LABELS.get(u, u) for u in dict.fromkeys(used)) or "도구 없이 답함"
             done = f"확인 완료  ·  {elapsed}초  ·  {names}"
             await slack_client.update_message(channel, status["ts"], done, blocks=[slack_client.section(done)])
-        await slack_client.post_message(channel, text or "답을 만들지 못했습니다.", thread_ts=thread, blocks=[slack_client.section(text or "답을 만들지 못했습니다.")])
+        shown = slack_ui.to_mrkdwn(text) or "답을 만들지 못했습니다."
+        await slack_client.post_message(channel, shown, thread_ts=thread, blocks=[slack_client.section(shown)])
     except Exception as e:
         log.exception("qa failed job=%s", job_id)
         await slack_client.post_message(channel, f"답하는 중 오류가 났습니다: `{str(e)[:200]}`", thread_ts=thread)
