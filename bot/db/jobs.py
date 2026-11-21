@@ -19,6 +19,11 @@ def upsert_job(conn, kind: str, channel: str, thread_ts: str, state: dict) -> di
     return row
 
 
+def job_by_thread(conn, channel: str, thread_ts: str) -> dict | None:
+    """이 스레드에서 봇이 이미 맡은 작업이 있으면 돌려준다."""
+    return conn.execute("SELECT * FROM job WHERE slack_channel = %s AND slack_ts = %s", (channel, thread_ts)).fetchone()
+
+
 def get_job(conn, job_id: int) -> dict | None:
     return conn.execute("SELECT * FROM job WHERE id = %s", (job_id,)).fetchone()
 

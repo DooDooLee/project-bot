@@ -30,26 +30,62 @@ def empty_mention_text(mention: str) -> str:
     )
 
 
+def thread_history(messages: list[dict], current_ts: str, limit: int = 8, max_chars: int = 6000) -> str:
+    """스레드에서 앞서 주고받은 글. 이어서 묻는 질문에 참고로 넘긴다."""
+    lines = []
+    for m in messages:
+        text = _MENTION.sub("", m.get("text") or "").strip()
+        if m.get("ts") == current_ts or not text:
+            continue
+        lines.append(f"[{'봇' if m.get('bot_id') else '팀원'}] {text[:1500]}")
+    return "\n\n".join(lines[-limit:])[-max_chars:]
+
+
 async def on_mention(ctx, event: dict) -> None:
     """멘션을 받으면 글을 읽고 오류 신고인지 질문인지 가려서 바로 시작한다."""
+    from bot.analysis import qa
+
     channel, thread = event["channel"], _thread(event)
     found = _MENTION.search(event.get("text", ""))
     mention = found.group(0) if found else "@봇"
     text = _MENTION.sub("", event.get("text", "")).strip()
+    previous, history = None, ""
     if event.get("thread_ts") and event["thread_ts"] != event["ts"]:
-        # 스레드 안에서 멘션했으면 첫 메시지(에러를 붙여 넣은 글)도 함께 본다
-        replies = await slack_client.call_get("conversations.replies", {"channel": channel, "ts": thread, "limit": 1})
-        parent = (replies.get("messages") or [{}])[0].get("text", "")
-        text = (parent + "\n" + text).strip()
+        replies = await slack_client.call_get("conversations.replies", {"channel": channel, "ts": thread, "limit": 100})
+        messages = replies.get("messages") or []
+        with store.connect() as conn:
+            previous = jobs.job_by_thread(conn, channel, thread)
+        if previous is None:
+            # 봇이 처음 불린 스레드: 첫 메시지(에러를 붙여 넣은 글)도 함께 읽는다
+            parent = (messages or [{}])[0].get("text", "")
+            text = (parent + "\n" + text).strip()
+        else:
+            # 봇이 이미 답한 스레드: 새로 쓴 글만 요청으로 받고, 앞의 대화는 참고로 넘긴다
+            history = thread_history(messages, event["ts"])
     if not text:
         # 내용 없이 봇만 불렀으면 접수하지 않고 쓰는 법을 알려 준다
         guide = empty_mention_text(mention)
         await slack_client.post_message(channel, guide, thread_ts=thread, blocks=[slack_client.section(guide)])
         return
+
+    if previous is not None:
+        try:
+            intent = await qa.classify(text)
+        except Exception:
+            log.exception("메시지 종류를 가리지 못함")
+            intent = "question"
+        if intent == "error":
+            # 추가 설명을 붙여 다시 분석한다
+            report = f"{previous['state'].get('report', '')}\n\n[추가 설명]\n{text}".strip()
+            with store.connect() as conn:
+                jobs.update_job(conn, previous["id"], report=report, reported_at_ns=time.time_ns())
+            await analyze_error(ctx, previous["id"])
+        else:
+            await qa.answer(ctx, previous["id"], intent=intent, question=text, history=history)
+        return
+
     with store.connect() as conn:
         job = jobs.upsert_job(conn, "report", channel, thread, {"report": text, "reported_at_ns": time.time_ns(), "user": event.get("user")})
-    from bot.analysis import qa
-
     try:
         intent = await qa.classify(text)
     except Exception:
@@ -123,7 +159,8 @@ async def show_evidence(ctx, job_id: int) -> None:
 
 async def analyze_error(ctx, job_id: int, build_log: str = "") -> None:
     with store.connect() as conn:
-        if not jobs.claim(conn, job_id, ("received", "analyzed", "failed"), "analyzing"):
+        # 분석 중이거나 AI가 고치는 중이 아니면 다시 분석할 수 있다
+        if not jobs.claim(conn, job_id, ("received", "analyzed", "failed", "answered", "fixed", "fix_failed", "resolved"), "analyzing"):
             return
         job = jobs.get_job(conn, job_id)
     channel, thread = job["slack_channel"], job["slack_ts"]

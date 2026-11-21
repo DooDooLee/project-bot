@@ -2,6 +2,7 @@
 
 사용:
   python scripts/simulate_slack.py mention "에러 내용..."        → 채널에 글을 올리고 봇을 멘션한 것처럼 처리. 스레드 ts를 출력
+  python scripts/simulate_slack.py reply <스레드 ts> "이어 묻는 말"  → 그 스레드 안에서 봇을 다시 부른 것처럼 처리
   python scripts/simulate_slack.py click <스레드 ts> <action_id>  → 그 스레드의 버튼을 누른 것처럼 처리
   python scripts/simulate_slack.py show <스레드 ts>               → 스레드의 메시지를 출력
 
@@ -57,6 +58,14 @@ def mention(text: str) -> None:
     event = {"type": "event_callback", "event": {"type": "app_mention", "channel": CHANNEL, "ts": ts, "user": USER, "text": f"<@BOT> {text}"}}
     print("webhook:", send_signed("/slack/events", json.dumps(event).encode(), "application/json"))
     print("thread_ts:", ts)
+
+
+def reply(thread_ts: str, text: str) -> None:
+    """스레드 안에서 봇을 다시 부른 것처럼 처리한다 (이어서 묻기)."""
+    posted = slack("chat.postMessage", {"channel": CHANNEL, "thread_ts": thread_ts, "text": f"[시험] {text}"})
+    event = {"type": "event_callback", "event": {"type": "app_mention", "channel": CHANNEL, "ts": posted["ts"], "thread_ts": thread_ts,
+                                                 "user": USER, "text": f"<@BOT> {text}"}}
+    print("webhook:", send_signed("/slack/events", json.dumps(event).encode(), "application/json"))
 
 
 def replies(thread_ts: str) -> list[dict]:
@@ -115,6 +124,8 @@ if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
     if cmd == "mention":
         mention(sys.argv[2])
+    elif cmd == "reply":
+        reply(sys.argv[2], sys.argv[3])
     elif cmd == "click":
         click(sys.argv[2], sys.argv[3])
     elif cmd == "show":

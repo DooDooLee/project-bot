@@ -236,11 +236,30 @@ async def classify(text: str, usage: llm.Usage | None = None) -> str:
     return intent.get("intent") or "question"
 
 
-async def answer(ctx, job_id: int, intent: str | None = None) -> None:
+def with_context(question: str, history: str, result: dict | None) -> str:
+    """이어서 묻는 질문에는 앞의 대화와 이 스레드의 분석 결과를 참고로 붙인다."""
+    parts = []
+    if history:
+        parts.append("## 이 스레드에서 앞서 주고받은 내용 (참고용)\n" + history)
+    if result:
+        where = f"{result.get('file_path') or '-'}" + (f":{result['line']}" if result.get("line") else "")
+        parts.append(f"## 이 스레드의 장애 분석 결과 (참고용)\n증상: {result.get('symptom')}\n원인: {result.get('cause')}\n위치: {where} {result.get('symbol') or ''}")
+    if not parts:
+        return question
+    parts.append(
+        "## 이번 질문\n" + question
+        + "\n\n위의 참고 내용은 '그 메서드', '방금 그 에러'처럼 가리키는 말을 이해하는 데만 쓰고, 이번 질문에만 답한다. 앞에서 이미 답한 내용은 되풀이하지 않는다."
+    )
+    return "\n\n".join(parts)
+
+
+async def answer(ctx, job_id: int, intent: str | None = None, question: str | None = None, history: str = "") -> None:
+    """question 이 없으면 작업에 저장된 첫 글에 답하고, 있으면 스레드에서 이어 묻는 그 질문에 답한다."""
     with store.connect() as conn:
         job = jobs.get_job(conn, job_id)
     channel, thread = job["slack_channel"], job["slack_ts"]
-    question = (job["state"].get("report") or "").strip()
+    follow_up = question is not None
+    question = (question if follow_up else job["state"].get("report") or "").strip()
     if not question:
         await slack_client.post_message(channel, "질문 내용이 없습니다. 봇을 부를 때 질문을 함께 적어 주세요.", thread_ts=thread)
         return
@@ -263,12 +282,15 @@ async def answer(ctx, job_id: int, intent: str | None = None) -> None:
 
         system = SYSTEM.format(now=datetime.now(KST).strftime("%Y-%m-%d %H:%M"))
         text = await llm.tool_loop(
-            llm.SONNET, system, [{"role": "user", "content": question}], TOOLS, build_handlers(ctx),
+            llm.SONNET, system, [{"role": "user", "content": with_context(question, history, job["state"].get("result") if follow_up else None)}],
+            TOOLS, build_handlers(ctx),
             max_turns=8, max_tokens=1500, usage=usage, on_tool=on_tool,
         )
         elapsed = round(time.time() - started, 1)
         with store.connect() as conn:
-            jobs.update_job(conn, job_id, "answered", answer=text, tools_used=used, usage=usage.as_dict(), elapsed_seconds=elapsed)
+            # 분석이 끝난 스레드에서 이어 물은 것이면 상태를 바꾸지 않는다 (AI 수정 버튼이 계속 눌려야 한다)
+            status_after = "answered" if job["status"] in ("received", "answered") else None
+            jobs.update_job(conn, job_id, status_after, answer=text, tools_used=used, usage=usage.as_dict(), elapsed_seconds=elapsed)
         names = " · ".join(TOOL_LABELS.get(u, u) for u in dict.fromkeys(used)) or "도구 없이 답함"
         if status.get("ts"):
             # 진행 메시지는 지우고 답 하나만 남긴다

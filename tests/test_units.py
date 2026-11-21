@@ -509,3 +509,96 @@ def test_color_bar_message_is_shown_once():
     # blocks 가 있으면 Slack이 text 를 그리지 않으므로 그대로 둔다
     assert slack_client._only_once("제목", [{"type": "divider"}], None) == ("제목", None)
     assert slack_client._only_once("제목", [{"type": "divider"}], card) == ("제목", card)
+
+
+def test_follow_up_in_thread_is_a_new_question(monkeypatch):
+    """봇이 이미 답한 스레드에서 다시 부르면, 새로 쓴 글만 질문으로 받고 앞의 대화는 참고로 넘긴다."""
+    import asyncio
+    from contextlib import contextmanager
+
+    from bot.analysis import qa
+    from bot.worker import main as worker
+
+    calls = []
+    thread = [
+        {"ts": "1.0", "text": "<@U0BOT> 주문 만들 때 호출되는 API 알려줘", "user": "U1"},
+        {"ts": "1.1", "text": "POST /api/v1/orders 를 호출합니다.", "bot_id": "B1"},
+        {"ts": "1.2", "text": "", "bot_id": "B1"},  # 색 띠만 있는 진행 메시지는 글이 비어 있다
+        {"ts": "1.3", "text": "<@U0BOT> 마지막 배포 성공했어?", "user": "U1"},
+    ]
+
+    @contextmanager
+    def fake_conn():
+        yield object()
+
+    async def fake_replies(method, params):
+        return {"messages": thread}
+
+    async def fake_classify(text, usage=None):
+        calls.append(("classify", text))
+        return "question"
+
+    async def fake_answer(ctx, job_id, intent=None, question=None, history=""):
+        calls.append(("answer", job_id, question, history))
+
+    def no_upsert(*args, **kwargs):
+        raise AssertionError("이어 묻는 질문으로 첫 글(report)을 덮어쓰지 않는다")
+
+    monkeypatch.setattr(worker.store, "connect", fake_conn)
+    monkeypatch.setattr(worker.slack_client, "call_get", fake_replies)
+    monkeypatch.setattr(worker.jobs, "job_by_thread", lambda conn, channel, ts: {"id": 5, "status": "answered", "state": {"report": "주문 만들 때 호출되는 API 알려줘"}})
+    monkeypatch.setattr(worker.jobs, "upsert_job", no_upsert)
+    monkeypatch.setattr(qa, "classify", fake_classify)
+    monkeypatch.setattr(qa, "answer", fake_answer)
+    asyncio.run(worker.on_mention({}, {"channel": "C1", "ts": "1.3", "thread_ts": "1.0", "text": "<@U0BOT> 마지막 배포 성공했어?"}))
+
+    assert calls[0] == ("classify", "마지막 배포 성공했어?")  # 첫 글과 합치지 않는다
+    _, job_id, question, history = calls[1]
+    assert job_id == 5 and question == "마지막 배포 성공했어?"
+    assert history == "[팀원] 주문 만들 때 호출되는 API 알려줘\n\n[봇] POST /api/v1/orders 를 호출합니다."  # 지금 질문과 빈 글은 뺀다
+
+
+def test_first_mention_in_thread_reads_parent_message(monkeypatch):
+    """봇이 처음 불린 스레드에서는 첫 메시지(에러를 붙여 넣은 글)도 함께 읽는다."""
+    import asyncio
+    from contextlib import contextmanager
+
+    from bot.analysis import qa
+    from bot.worker import main as worker
+
+    saved, ran = [], []
+
+    @contextmanager
+    def fake_conn():
+        yield object()
+
+    async def fake_replies(method, params):
+        return {"messages": [{"ts": "1.0", "text": "결제하면 500 에러가 나요", "user": "U2"}, {"ts": "1.4", "text": "<@U0BOT> 이거 봐 줘", "user": "U1"}]}
+
+    async def fake_classify(text, usage=None):
+        return "error"
+
+    async def fake_analyze(ctx, job_id, build_log=""):
+        ran.append(job_id)
+
+    def fake_upsert(conn, kind, channel, thread_ts, state):
+        saved.append(state["report"])
+        return {"id": 8, "state": state}
+
+    monkeypatch.setattr(worker.store, "connect", fake_conn)
+    monkeypatch.setattr(worker.slack_client, "call_get", fake_replies)
+    monkeypatch.setattr(worker.jobs, "job_by_thread", lambda conn, channel, ts: None)
+    monkeypatch.setattr(worker.jobs, "upsert_job", fake_upsert)
+    monkeypatch.setattr(qa, "classify", fake_classify)
+    monkeypatch.setattr(worker, "analyze_error", fake_analyze)
+    asyncio.run(worker.on_mention({}, {"channel": "C1", "ts": "1.4", "thread_ts": "1.0", "text": "<@U0BOT> 이거 봐 줘"}))
+    assert saved == ["결제하면 500 에러가 나요\n이거 봐 줘"] and ran == [8]
+
+
+def test_follow_up_question_gets_context_but_is_asked_alone():
+    from bot.analysis import qa
+
+    assert qa.with_context("배포 성공했어?", "", None) == "배포 성공했어?"  # 참고할 것이 없으면 질문만
+    text = qa.with_context("그 메서드는 어디서 불러?", "[봇] createOrder 가 받습니다.", {"symptom": "주문 500", "cause": "재고 확인 누락", "file_path": "a/OrderService.java", "line": 30, "symbol": "create"})
+    assert text.index("앞서 주고받은 내용") < text.index("장애 분석 결과") < text.index("## 이번 질문\n그 메서드는 어디서 불러?")
+    assert "위치: a/OrderService.java:30 create" in text and "이번 질문에만 답한다" in text
