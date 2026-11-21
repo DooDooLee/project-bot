@@ -1,4 +1,4 @@
-"""FastAPI 서버. n8n이 전달한 요청을 받아 대기열에 넣고 바로 응답한다. 오래 걸리는 일은 워커가 한다."""
+"""FastAPI 서버. n8n(알림 관문)이 넘긴 요청의 서명을 확인하고 대기열에 넣은 뒤 바로 응답한다. 오래 걸리는 일은 워커가 한다."""
 from __future__ import annotations
 
 import json

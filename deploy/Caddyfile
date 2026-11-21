@@ -1,13 +1,7 @@
 # 봇 서버 진입점. HTTPS 인증서는 Caddy가 자동으로 받는다.
 {$BOT_HOST} {
-	# Slack 요청은 서명 검증에 원본 본문이 필요해서 API로 바로 보낸다
-	# (n8n을 거치면 폼 본문이 다시 인코딩되어 서명이 맞지 않는다)
-	handle /webhook/slack/* {
-		uri strip_prefix /webhook
-		reverse_proxy api:8000
-	}
-
-	# Jenkins, GitHub 알림은 n8n이 받아서 API로 넘긴다
+	# 바깥에서 오는 알림(Slack, Jenkins, GitHub)은 전부 n8n이 받는다.
+	# n8n이 쓸모없는 알림을 버리고 종류에 맞는 봇 API 주소로 넘긴다 (n8n/workflows/inboundGateway01.json)
 	handle /webhook/* {
 		reverse_proxy n8n:5678
 	}

@@ -17,10 +17,10 @@ Slack에 에러를 붙여 넣으면 원인을 분석하고, 코드 문제면 고
 
 ```mermaid
 flowchart LR
-    Slack <--> Caddy
+    Slack --> Caddy
+    GitHub -- PR merge --> Caddy
     subgraph 봇 서버
-        Caddy --> API[FastAPI]
-        Caddy --> n8n --> API
+        Caddy --> n8n[n8n · 알림 관문] --> API[FastAPI]
         API --> Q[(Redis 대기열)] --> W[워커 · LangGraph]
         W --> PG[(Postgres · pgvector)]
         W --> Q
@@ -30,15 +30,17 @@ flowchart LR
     subgraph 앱 서버
         App[서비스 컨테이너] --> Alloy --> Loki
         Exp[exporter] --> Prom
-        Jenkins --> n8n
+        Jenkins -- 배포 알림 --> Caddy
     end
+    W --> Slack
     W --> Claude[Claude API]
     W --> GitHub
     W --> Jenkins
 ```
 
-- **FastAPI 서버**는 요청을 받아 대기열에 넣고 바로 응답합니다. 분석과 수정은 수십 초에서 몇 분이 걸려서 **워커**가 따로 실행합니다.
-- **Slack 요청**은 서명 검증에 본문 원본이 필요해서 Caddy가 API로 바로 넘깁니다. **Jenkins, GitHub 알림**은 n8n이 받아 API로 넘깁니다.
+- **n8n**은 바깥에서 오는 알림(Slack, Jenkins, GitHub)을 한 곳에서 받는 관문입니다. 쓸모없는 알림(Slack의 재전송, 봇 자신이 쓴 글, merge가 아닌 PR 알림 등)을 버리고, 종류에 맞는 API 주소로 넘깁니다. 새 알림을 붙일 때는 코드를 고치지 않고 워크플로에 받는 상자 하나를 더합니다.
+- **FastAPI 서버**는 n8n이 넘긴 요청의 서명을 확인하고, 대기열에 넣은 뒤 바로 응답합니다. 분석과 수정은 수십 초에서 몇 분이 걸려서 **워커**가 따로 실행합니다. 결과는 워커가 Slack에 직접 올립니다.
+- Slack 서명은 받은 본문의 원본으로만 확인할 수 있어서, n8n은 Slack 요청을 풀지 않은 원본 그대로 넘깁니다.
 - **Postgres**에는 코드 청크, 콜 그래프, 문서, 장애 기록, 작업 상태가 들어갑니다. 원본 코드는 Git에 있고 DB는 검색용 사본입니다.
 - **Redis**는 대기열과 코드 캐시로 씁니다.
 
@@ -102,9 +104,12 @@ RoomPage.jsx#loadRoom → GET /api/v1/rooms/{} → RoomController#getRoom → Ro
 5. **Slack 앱**을 `slack/manifest.example.yml`로 만들고 Bot Token과 Signing Secret을 `.env`에 넣습니다.
 6. n8n 워크플로를 넣습니다.
    ```bash
-   docker compose exec n8n n8n import:workflow --input=/files/jenkinsDeploy01.json
-   docker compose exec n8n n8n publish:workflow --id=jenkinsDeploy01
+   docker compose exec n8n n8n import:workflow --input=/files/inboundGateway01.json
+   docker compose exec n8n n8n publish:workflow --id=inboundGateway01
+   docker compose restart n8n
+   docker compose exec -T api python - < scripts/check_gateway.py   # 받기·거르기·넘기기 14가지 확인
    ```
+   워크플로를 고칠 때는 `scripts/build_n8n_workflow.py`를 고쳐 파일을 다시 만든 뒤 위 순서를 되풀이합니다. 다시 넣으면 꺼진 상태가 되므로 `publish`와 `restart`를 꼭 다시 합니다.
 7. 코드를 처음 한 번 읽어 들입니다.
    ```bash
    docker compose exec api python -m bot index     # 청크와 콜 그래프
