@@ -66,8 +66,13 @@ def card(kind: str, blocks: list) -> list:
 
 
 def notice(kind: str, text: str) -> list:
-    """한두 줄짜리 알림 (배포 시작, 배포 성공 등)."""
+    """색 띠가 붙은 한두 줄. 진행 표시에 쓴다."""
     return card(kind, [slack_client.section(text)])
+
+
+def line(kind: str, text: str) -> list:
+    """앞에 색 동그라미를 붙인 한두 줄짜리 결과 알림 (배포 시작, 배포 성공 등)."""
+    return [slack_client.section(f"{MARKS.get(kind, MARKS['muted'])} {text}")]
 
 
 def bullets(items, limit: int = 60, numbered: bool = False) -> str:
@@ -102,7 +107,7 @@ class Progress:
 
     async def _show(self, body: str, kind: str = "info") -> None:
         if self.ts is None:
-            resp = await slack_client.post_message(self.channel, body, thread_ts=self.thread, attachments=notice(kind, body))
+            resp = await slack_client.post_message(self.channel, body, thread_ts=self.thread, attachments=notice(kind, body), transient=True)
             self.ts = resp.get("ts")
         else:
             await slack_client.update_message(self.channel, self.ts, body, attachments=notice(kind, body))

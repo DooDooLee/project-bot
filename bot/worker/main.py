@@ -166,7 +166,7 @@ async def show_evidence(ctx, job_id: int) -> None:
     with store.connect() as conn:
         job = jobs.get_job(conn, job_id)
     text, blocks = slack_ui.evidence_message(job["state"])
-    await slack_client.post_message(job["slack_channel"], text, thread_ts=job["slack_ts"], blocks=blocks)
+    await slack_client.post_message(job["slack_channel"], text, thread_ts=job["slack_ts"], blocks=blocks, kind="evidence")
 
 
 async def analyze_error(ctx, job_id: int, build_log: str = "") -> None:
@@ -209,7 +209,7 @@ async def analyze_error(ctx, job_id: int, build_log: str = "") -> None:
         # 진행 메시지는 지우고 결과 하나만 남긴다 (새 글로 올려야 스레드 알림이 간다)
         await progress.remove()
         text, blocks = slack_ui.report_message(result, state, job_id, elapsed)
-        await slack_client.post_message(channel, text, thread_ts=thread, blocks=blocks)
+        await slack_client.post_message(channel, text, thread_ts=thread, blocks=blocks, kind="analysis")
     except Exception as e:
         log.exception("analyze_error failed job=%s", job_id)
         await progress.remove()

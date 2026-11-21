@@ -1,6 +1,6 @@
 {
   "id": "inboundGateway01",
-  "name": "알림 관문 (Slack, Jenkins, GitHub → 봇 API)",
+  "name": "봇의 문 (받기: Slack·Jenkins·GitHub → 봇 API / 보내기: 봇의 결과 → Slack)",
   "active": false,
   "settings": {
     "executionOrder": "v1"
@@ -9,146 +9,250 @@
   "nodes": [
     {
       "id": "inboundGateway01-1",
-      "name": "응답: 봇 API의 답 그대로",
-      "type": "n8n-nodes-base.respondToWebhook",
-      "typeVersion": 1.1,
+      "name": "메모: ① 받기",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
       "position": [
-        1080,
-        300
+        -70,
+        -90
       ],
       "parameters": {
-        "respondWith": "json",
-        "responseBody": "={{ JSON.stringify($json.body || { ok: false }) }}",
-        "options": {
-          "responseCode": "={{ $json.statusCode || 502 }}"
-        }
+        "content": "## ① 받기\n바깥에서 오는 알림을 받는다.",
+        "width": 260,
+        "height": 640,
+        "color": 4
       }
     },
     {
       "id": "inboundGateway01-2",
-      "name": "응답: 받았지만 넘기지 않음",
-      "type": "n8n-nodes-base.respondToWebhook",
-      "typeVersion": 1.1,
+      "name": "메모: ② 나누기",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
       "position": [
-        1080,
-        620
+        270,
+        -90
       ],
       "parameters": {
-        "respondWith": "json",
-        "responseBody": "={{ JSON.stringify({ ok: true, ignored: true }) }}",
-        "options": {}
+        "content": "## ② 나누기\n무엇인지 보고 갈 곳을 정한다.\n쓸모없는 것은 '버림'으로 보낸다.",
+        "width": 260,
+        "height": 640,
+        "color": 5
       }
     },
     {
       "id": "inboundGateway01-3",
-      "name": "Slack: 봇을 부름",
+      "name": "메모: ③ 봇 API로 넘기기",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        630,
+        -90
+      ],
+      "parameters": {
+        "content": "## ③ 봇 API로 넘기기\n종류에 맞는 주소로 넘긴다.",
+        "width": 260,
+        "height": 640,
+        "color": 6
+      }
+    },
+    {
+      "id": "inboundGateway01-4",
+      "name": "메모: ④ 답하기",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        990,
+        -90
+      ],
+      "parameters": {
+        "content": "## ④ 답하기\n보낸 쪽에 받았다고 답한다.",
+        "width": 260,
+        "height": 640,
+        "color": 7
+      }
+    },
+    {
+      "id": "inboundGateway01-5",
+      "name": "Slack",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
       "position": [
         0,
-        0
+        60
       ],
       "parameters": {
         "httpMethod": "POST",
-        "path": "slack/events",
+        "path": "slack",
         "responseMode": "responseNode",
         "options": {
           "rawBody": true
         }
       },
-      "webhookId": "inboundGateway01-slack-events"
-    },
-    {
-      "id": "inboundGateway01-4",
-      "name": "주소 확인 요청인가",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2.2,
-      "position": [
-        260,
-        0
-      ],
-      "parameters": {
-        "conditions": {
-          "options": {
-            "caseSensitive": true,
-            "leftValue": "",
-            "typeValidation": "loose",
-            "version": 2
-          },
-          "conditions": [
-            {
-              "id": "inboundGateway01-cond-4",
-              "leftValue": "={{ $json.body.type === 'url_verification' }}",
-              "rightValue": "",
-              "operator": {
-                "type": "boolean",
-                "operation": "true",
-                "singleValue": true
-              }
-            }
-          ],
-          "combinator": "and"
-        },
-        "options": {}
-      }
-    },
-    {
-      "id": "inboundGateway01-5",
-      "name": "응답: 주소 확인",
-      "type": "n8n-nodes-base.respondToWebhook",
-      "typeVersion": 1.1,
-      "position": [
-        520,
-        -120
-      ],
-      "parameters": {
-        "respondWith": "json",
-        "responseBody": "={{ JSON.stringify({ challenge: $json.body.challenge || '' }) }}",
-        "options": {}
-      }
+      "webhookId": "inboundGateway01-slack"
     },
     {
       "id": "inboundGateway01-6",
-      "name": "처리할 부름인가",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2.2,
+      "name": "Jenkins",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
       "position": [
-        520,
-        60
+        0,
+        230
       ],
       "parameters": {
-        "conditions": {
-          "options": {
-            "caseSensitive": true,
-            "leftValue": "",
-            "typeValidation": "loose",
-            "version": 2
-          },
-          "conditions": [
-            {
-              "id": "inboundGateway01-cond-6",
-              "leftValue": "={{ !$json.headers['x-slack-retry-num'] && ($json.body.event || {}).type === 'app_mention' && !($json.body.event || {}).bot_id }}",
-              "rightValue": "",
-              "operator": {
-                "type": "boolean",
-                "operation": "true",
-                "singleValue": true
-              }
-            }
-          ],
-          "combinator": "and"
-        },
+        "httpMethod": "POST",
+        "path": "jenkins",
+        "responseMode": "responseNode",
         "options": {}
-      }
+      },
+      "webhookId": "inboundGateway01-jenkins"
     },
     {
       "id": "inboundGateway01-7",
-      "name": "봇 API로: 부름",
+      "name": "GitHub",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        400
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "github",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "webhookId": "inboundGateway01-github"
+    },
+    {
+      "id": "inboundGateway01-8",
+      "name": "종류별로 나누기",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        340,
+        230
+      ],
+      "parameters": {
+        "mode": "rules",
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "inboundGateway01-rule-봇을 부름",
+                    "leftValue": "={{ $('Slack').isExecuted && !$json.headers['x-slack-retry-num'] && ($json.body.event || {}).type === 'app_mention' && !($json.body.event || {}).bot_id }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "봇을 부름"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "inboundGateway01-rule-버튼 누름",
+                    "leftValue": "={{ $('Slack').isExecuted && String($json.body.payload || '').replace(/\\s/g, '').includes('\"type\":\"block_actions\"') }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "버튼 누름"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "inboundGateway01-rule-배포 알림",
+                    "leftValue": "={{ $('Jenkins').isExecuted && ['STARTED', 'SUCCESS', 'FAILURE', 'UNSTABLE', 'ABORTED'].includes(String($json.body.status || '').toUpperCase()) }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "배포 알림"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "inboundGateway01-rule-PR 합쳐짐",
+                    "leftValue": "={{ $('GitHub').isExecuted && $json.body.action === 'closed' && ($json.body.pull_request || {}).merged === true }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "PR 합쳐짐"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "버림"
+        }
+      }
+    },
+    {
+      "id": "inboundGateway01-9",
+      "name": "봇 API로: 봇을 부름",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        800,
-        0
+        700,
+        -20
       ],
       "parameters": {
         "method": "POST",
@@ -186,66 +290,13 @@
       "onError": "continueRegularOutput"
     },
     {
-      "id": "inboundGateway01-8",
-      "name": "Slack: 버튼을 누름",
-      "type": "n8n-nodes-base.webhook",
-      "typeVersion": 2,
-      "position": [
-        0,
-        220
-      ],
-      "parameters": {
-        "httpMethod": "POST",
-        "path": "slack/actions",
-        "responseMode": "responseNode",
-        "options": {
-          "rawBody": true
-        }
-      },
-      "webhookId": "inboundGateway01-slack-actions"
-    },
-    {
-      "id": "inboundGateway01-9",
-      "name": "버튼 누름인가",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2.2,
-      "position": [
-        260,
-        220
-      ],
-      "parameters": {
-        "conditions": {
-          "options": {
-            "caseSensitive": true,
-            "leftValue": "",
-            "typeValidation": "loose",
-            "version": 2
-          },
-          "conditions": [
-            {
-              "id": "inboundGateway01-cond-9",
-              "leftValue": "={{ String($json.body.payload || '').replace(/\\s/g, '').includes('\"type\":\"block_actions\"') }}",
-              "rightValue": "",
-              "operator": {
-                "type": "boolean",
-                "operation": "true",
-                "singleValue": true
-              }
-            }
-          ],
-          "combinator": "and"
-        },
-        "options": {}
-      }
-    },
-    {
       "id": "inboundGateway01-10",
-      "name": "봇 API로: 버튼",
+      "name": "봇 API로: 버튼 누름",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        800,
-        220
+        700,
+        150
       ],
       "parameters": {
         "method": "POST",
@@ -284,63 +335,12 @@
     },
     {
       "id": "inboundGateway01-11",
-      "name": "Jenkins: 배포 알림",
-      "type": "n8n-nodes-base.webhook",
-      "typeVersion": 2,
-      "position": [
-        0,
-        440
-      ],
-      "parameters": {
-        "httpMethod": "POST",
-        "path": "jenkins",
-        "responseMode": "responseNode",
-        "options": {}
-      },
-      "webhookId": "inboundGateway01-jenkins"
-    },
-    {
-      "id": "inboundGateway01-12",
-      "name": "다루는 배포 상태인가",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2.2,
-      "position": [
-        260,
-        440
-      ],
-      "parameters": {
-        "conditions": {
-          "options": {
-            "caseSensitive": true,
-            "leftValue": "",
-            "typeValidation": "loose",
-            "version": 2
-          },
-          "conditions": [
-            {
-              "id": "inboundGateway01-cond-12",
-              "leftValue": "={{ ['STARTED', 'SUCCESS', 'FAILURE', 'UNSTABLE', 'ABORTED'].includes(String($json.body.status || '').toUpperCase()) }}",
-              "rightValue": "",
-              "operator": {
-                "type": "boolean",
-                "operation": "true",
-                "singleValue": true
-              }
-            }
-          ],
-          "combinator": "and"
-        },
-        "options": {}
-      }
-    },
-    {
-      "id": "inboundGateway01-13",
-      "name": "봇 API로: 배포",
+      "name": "봇 API로: 배포 알림",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        800,
-        440
+        700,
+        320
       ],
       "parameters": {
         "method": "POST",
@@ -370,64 +370,13 @@
       "onError": "continueRegularOutput"
     },
     {
-      "id": "inboundGateway01-14",
-      "name": "GitHub: PR 알림",
-      "type": "n8n-nodes-base.webhook",
-      "typeVersion": 2,
-      "position": [
-        0,
-        660
-      ],
-      "parameters": {
-        "httpMethod": "POST",
-        "path": "github",
-        "responseMode": "responseNode",
-        "options": {}
-      },
-      "webhookId": "inboundGateway01-github"
-    },
-    {
-      "id": "inboundGateway01-15",
-      "name": "merge된 PR인가",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2.2,
-      "position": [
-        260,
-        660
-      ],
-      "parameters": {
-        "conditions": {
-          "options": {
-            "caseSensitive": true,
-            "leftValue": "",
-            "typeValidation": "loose",
-            "version": 2
-          },
-          "conditions": [
-            {
-              "id": "inboundGateway01-cond-15",
-              "leftValue": "={{ $json.body.action === 'closed' && ($json.body.pull_request || {}).merged === true }}",
-              "rightValue": "",
-              "operator": {
-                "type": "boolean",
-                "operation": "true",
-                "singleValue": true
-              }
-            }
-          ],
-          "combinator": "and"
-        },
-        "options": {}
-      }
-    },
-    {
-      "id": "inboundGateway01-16",
-      "name": "봇 API로: PR merge",
+      "id": "inboundGateway01-12",
+      "name": "봇 API로: PR 합쳐짐",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        800,
-        660
+        700,
+        490
       ],
       "parameters": {
         "method": "POST",
@@ -455,181 +404,242 @@
         }
       },
       "onError": "continueRegularOutput"
+    },
+    {
+      "id": "inboundGateway01-13",
+      "name": "받았다고 답함",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1060,
+        230
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json.statusCode ? ($json.body || {}) : ($json.error ? { ok: false } : ((($json.body || {}).type === 'url_verification') ? { challenge: $json.body.challenge || '' } : { ok: true, ignored: true }))) }}",
+        "options": {
+          "responseCode": "={{ $json.statusCode || ($json.error ? 502 : 200) }}"
+        }
+      }
+    },
+    {
+      "id": "inboundGateway01-14",
+      "name": "메모: ⑤ 봇의 결과 받기",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -70,
+        650
+      ],
+      "parameters": {
+        "content": "## ⑤ 봇의 결과 받기\n봇이 만든 결과(분석, 답변, 수정, 배포 알림)가 들어온다.\n서버 안에서만 부를 수 있다.",
+        "width": 260,
+        "height": 300,
+        "color": 4
+      }
+    },
+    {
+      "id": "inboundGateway01-15",
+      "name": "메모: ⑥ 내보내기",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        270,
+        650
+      ],
+      "parameters": {
+        "content": "## ⑥ 내보내기\n결과를 Slack에 올린다.\nNotion 기록이나 메일 발송은 여기에 상자를 하나 더 달면 된다.",
+        "width": 620,
+        "height": 300,
+        "color": 3
+      }
+    },
+    {
+      "id": "inboundGateway01-16",
+      "name": "봇의 결과",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        760
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "internal/result",
+        "responseMode": "lastNode",
+        "options": {},
+        "authentication": "headerAuth"
+      },
+      "webhookId": "inboundGateway01-internal-result",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "internalHook01",
+          "name": "봇 내부 요청 확인"
+        }
+      }
+    },
+    {
+      "id": "inboundGateway01-17",
+      "name": "Slack에 올리기",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        340,
+        760
+      ],
+      "parameters": {
+        "authentication": "accessToken",
+        "resource": "message",
+        "operation": "post",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $json.body.channel }}"
+        },
+        "messageType": "block",
+        "blocksUi": "={{ JSON.stringify({ blocks: $json.body.blocks }) }}",
+        "text": "={{ $json.body.text }}",
+        "otherOptions": {
+          "includeLinkToWorkflow": false,
+          "thread_ts": {
+            "replyValues": {
+              "thread_ts": "={{ $json.body.thread_ts || undefined }}",
+              "reply_broadcast": false
+            }
+          }
+        }
+      },
+      "credentials": {
+        "slackApi": {
+          "id": "slackBot01",
+          "name": "Slack 봇"
+        }
+      }
     }
   ],
   "connections": {
-    "Slack: 봇을 부름": {
+    "Slack": {
       "main": [
         [
           {
-            "node": "주소 확인 요청인가",
+            "node": "종류별로 나누기",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "주소 확인 요청인가": {
+    "Jenkins": {
       "main": [
         [
           {
-            "node": "응답: 주소 확인",
+            "node": "종류별로 나누기",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GitHub": {
+      "main": [
+        [
+          {
+            "node": "종류별로 나누기",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "종류별로 나누기": {
+      "main": [
+        [
+          {
+            "node": "봇 API로: 봇을 부름",
             "type": "main",
             "index": 0
           }
         ],
         [
           {
-            "node": "처리할 부름인가",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "처리할 부름인가": {
-      "main": [
-        [
-          {
-            "node": "봇 API로: 부름",
+            "node": "봇 API로: 버튼 누름",
             "type": "main",
             "index": 0
           }
         ],
         [
           {
-            "node": "응답: 받았지만 넘기지 않음",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "봇 API로: 부름": {
-      "main": [
-        [
-          {
-            "node": "응답: 봇 API의 답 그대로",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Slack: 버튼을 누름": {
-      "main": [
-        [
-          {
-            "node": "버튼 누름인가",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "버튼 누름인가": {
-      "main": [
-        [
-          {
-            "node": "봇 API로: 버튼",
+            "node": "봇 API로: 배포 알림",
             "type": "main",
             "index": 0
           }
         ],
         [
           {
-            "node": "응답: 받았지만 넘기지 않음",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "봇 API로: 버튼": {
-      "main": [
-        [
-          {
-            "node": "응답: 봇 API의 답 그대로",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Jenkins: 배포 알림": {
-      "main": [
-        [
-          {
-            "node": "다루는 배포 상태인가",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "다루는 배포 상태인가": {
-      "main": [
-        [
-          {
-            "node": "봇 API로: 배포",
+            "node": "봇 API로: PR 합쳐짐",
             "type": "main",
             "index": 0
           }
         ],
         [
           {
-            "node": "응답: 받았지만 넘기지 않음",
+            "node": "받았다고 답함",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "봇 API로: 배포": {
+    "봇 API로: 봇을 부름": {
       "main": [
         [
           {
-            "node": "응답: 봇 API의 답 그대로",
+            "node": "받았다고 답함",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "GitHub: PR 알림": {
+    "봇 API로: 버튼 누름": {
       "main": [
         [
           {
-            "node": "merge된 PR인가",
+            "node": "받았다고 답함",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "merge된 PR인가": {
+    "봇 API로: 배포 알림": {
       "main": [
         [
           {
-            "node": "봇 API로: PR merge",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "응답: 받았지만 넘기지 않음",
+            "node": "받았다고 답함",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "봇 API로: PR merge": {
+    "봇 API로: PR 합쳐짐": {
       "main": [
         [
           {
-            "node": "응답: 봇 API의 답 그대로",
+            "node": "받았다고 답함",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "봇의 결과": {
+      "main": [
+        [
+          {
+            "node": "Slack에 올리기",
             "type": "main",
             "index": 0
           }

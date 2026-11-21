@@ -83,7 +83,7 @@ async def handle(ctx, payload: dict) -> None:
 
     if status == "STARTED":
         text = f"*배포 시작 #{number}*  브랜치 `{payload.get('branch', '-')}`  커밋 `{commit or '-'}`"
-        resp = await slack_client.post_message(channel, text, attachments=slack_ui.notice("info", text))
+        resp = await slack_client.post_message(channel, text, blocks=slack_ui.line("info", text), kind="deploy")
         if resp.get("ts"):
             await redis.set(_key(payload), resp["ts"], ex=60 * 60 * 6)
         return
@@ -96,7 +96,7 @@ async def handle(ctx, payload: dict) -> None:
 
     if status == "SUCCESS":
         text = f"*배포 성공 #{number}*"
-        await slack_client.post_message(channel, text, thread_ts=thread, attachments=slack_ui.notice("done", text))
+        await slack_client.post_message(channel, text, thread_ts=thread, blocks=slack_ui.line("done", text), kind="deploy")
         try:
             s = await reindex(ctx)
             maps = await store_sourcemaps(payload.get("job"), number)
@@ -112,13 +112,13 @@ async def handle(ctx, payload: dict) -> None:
 
     if status == "ABORTED":  # 사람이 중단한 배포는 장애가 아니므로 분석하지 않는다
         text = f"*배포 중단 #{number}*"
-        await slack_client.post_message(channel, text, thread_ts=thread, attachments=slack_ui.notice("muted", text))
+        await slack_client.post_message(channel, text, thread_ts=thread, blocks=slack_ui.line("muted", text), kind="deploy")
         return
 
     if status in ("FAILURE", "UNSTABLE"):
         stage = payload.get("stage") or "-"
         text = f"*배포 실패 #{number}*  ·  단계 `{stage}`\n원인 분석을 시작합니다."
-        await slack_client.post_message(channel, text, thread_ts=thread, attachments=slack_ui.notice("failed", text))
+        await slack_client.post_message(channel, text, thread_ts=thread, blocks=slack_ui.line("failed", text), kind="deploy")
         try:
             build_log = jenkins.trim_build_log(await jenkins.console_text(payload.get("job"), number))
         except Exception as e:

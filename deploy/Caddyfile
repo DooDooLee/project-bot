@@ -2,6 +2,19 @@
 {$BOT_HOST} {
 	# 바깥에서 오는 알림(Slack, Jenkins, GitHub)은 전부 n8n이 받는다.
 	# n8n이 쓸모없는 알림을 버리고 종류에 맞는 봇 API 주소로 넘긴다 (n8n/workflows/inboundGateway01.json)
+
+	# '봇의 결과' 문은 봇이 서버 안에서만 부른다. 바깥에서는 닿지 못하게 막는다
+	handle /webhook/internal/* {
+		respond 404
+	}
+
+	# Slack 앱에는 주소가 두 개 등록돼 있다(봇을 부름, 버튼 누름). 둘 다 n8n의 Slack 상자 하나로 보낸다
+	@slack path /webhook/slack/events /webhook/slack/actions
+	handle @slack {
+		rewrite * /webhook/slack
+		reverse_proxy n8n:5678
+	}
+
 	handle /webhook/* {
 		reverse_proxy n8n:5678
 	}

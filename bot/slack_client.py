@@ -1,4 +1,9 @@
-"""Slack으로 메시지를 보낸다. 받는 쪽은 n8n을 거치고, 보내는 쪽은 Slack API를 직접 호출한다."""
+"""Slack으로 메시지를 보낸다.
+
+결과 글(분석, 답변, 수정, 배포 알림)은 n8n의 '봇의 결과' 문을 거쳐 올린다. n8n을 지나가야 나중에
+Notion 기록이나 메일 발송을 상자 하나로 붙일 수 있다.
+'분석 중…'처럼 몇 초마다 고쳐 쓰다가 지우는 글, 글 고치기, 글 지우기는 Slack API를 직접 부른다.
+"""
 from __future__ import annotations
 
 import logging
@@ -33,9 +38,37 @@ async def call_get(method: str, params: dict) -> dict:
     return data
 
 
+def result_gateway() -> str:
+    """n8n의 '봇의 결과' 문 주소. 비어 있으면 n8n 없이 Slack에 직접 올린다."""
+    return os.environ.get("N8N_RESULT_URL", "")
+
+
+async def publish(kind: str, channel: str, text: str, thread_ts: str | None, blocks: list | None) -> dict:
+    """결과 글을 n8n으로 보낸다. n8n의 Slack 상자가 올리고, 올라간 글의 ts 를 돌려준다."""
+    body = {"kind": kind, "channel": channel, "thread_ts": thread_ts or "", "text": text, "blocks": blocks or [section(text)]}
+    headers = {"x-webhook-secret": os.environ.get("WEBHOOK_SECRET", "")}
+    async with httpx.AsyncClient(timeout=15) as client:
+        r = await client.post(result_gateway(), json=body, headers=headers)
+    data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+    ts = data.get("ts") or (data.get("message") or {}).get("ts") or data.get("message_timestamp")
+    if r.status_code != 200 or not ts:
+        raise RuntimeError(f"n8n 응답 {r.status_code}: {str(data or r.text)[:200]}")
+    return {"ok": True, "ts": ts, "channel": data.get("channel") or channel, "via": "n8n"}
+
+
 async def post_message(channel: str, text: str, thread_ts: str | None = None, blocks: list | None = None,
-                       attachments: list | None = None) -> dict:
-    """attachments 는 왼쪽에 색 띠가 붙는 영역이다. [{"color": "#E24B4A", "blocks": [...]}]"""
+                       attachments: list | None = None, kind: str = "notice", transient: bool = False) -> dict:
+    """새 글을 올린다.
+
+    kind       글의 종류 (analysis, answer, fix, deploy, notice …). n8n에서 종류별로 다르게 다룰 때 쓴다.
+    transient  곧 고쳐 쓰거나 지울 글(진행 표시)이면 True. n8n을 거치지 않고 직접 올린다.
+    attachments 왼쪽에 색 띠가 붙는 영역. [{"color": "#E24B4A", "blocks": [...]}]
+    """
+    if not transient and not attachments and result_gateway():
+        try:
+            return await publish(kind, channel, text, thread_ts, blocks)
+        except Exception as e:  # n8n이 멈춰 있어도 결과는 사람에게 닿아야 한다
+            log.warning("n8n으로 올리지 못해 Slack에 직접 올림: %s", e)
     text, attachments = _only_once(text, blocks, attachments)
     payload: dict = {"channel": channel, "text": text}
     if thread_ts:

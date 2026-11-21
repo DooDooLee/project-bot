@@ -20,8 +20,9 @@ flowchart LR
     Slack --> Caddy
     GitHub -- PR merge --> Caddy
     subgraph 봇 서버
-        Caddy --> n8n[n8n · 알림 관문] --> API[FastAPI]
+        Caddy --> n8n[n8n · 봇의 문] --> API[FastAPI]
         API --> Q[(Redis 대기열)] --> W[워커 · LangGraph]
+        W -- 결과 --> n8n
         W --> PG[(Postgres · pgvector)]
         W --> Q
         W --> Loki
@@ -32,14 +33,18 @@ flowchart LR
         Exp[exporter] --> Prom
         Jenkins -- 배포 알림 --> Caddy
     end
-    W --> Slack
+    n8n -- 결과 글 --> Slack
     W --> Claude[Claude API]
     W --> GitHub
     W --> Jenkins
 ```
 
-- **n8n**은 바깥에서 오는 알림(Slack, Jenkins, GitHub)을 한 곳에서 받는 관문입니다. 쓸모없는 알림(Slack의 재전송, 봇 자신이 쓴 글, merge가 아닌 PR 알림 등)을 버리고, 종류에 맞는 API 주소로 넘깁니다. 새 알림을 붙일 때는 코드를 고치지 않고 워크플로에 받는 상자 하나를 더합니다.
-- **FastAPI 서버**는 n8n이 넘긴 요청의 서명을 확인하고, 대기열에 넣은 뒤 바로 응답합니다. 분석과 수정은 수십 초에서 몇 분이 걸려서 **워커**가 따로 실행합니다. 결과는 워커가 Slack에 직접 올립니다.
+- **n8n**은 봇의 문입니다. 워크플로 하나에 줄이 두 개 있습니다.
+  - **받는 줄**: 바깥에서 오는 알림(Slack, Jenkins, GitHub)을 받아, 나누기 상자 하나에서 종류를 가립니다. 쓸모없는 알림(Slack의 재전송, 봇 자신이 쓴 글, merge가 아닌 PR 알림 등)은 버리고, 나머지는 종류에 맞는 API 주소로 넘깁니다.
+  - **보내는 줄**: 봇이 만든 결과(분석, 답변, 수정, 배포 알림)를 받아 Slack 상자로 올립니다. 결과가 n8n을 지나가므로 Notion 기록이나 메일 발송을 상자 하나로 붙일 수 있습니다.
+  - 새 알림을 받거나 결과를 다른 곳에도 보내고 싶을 때 코드를 고치지 않고 상자를 더합니다.
+- **FastAPI 서버**는 n8n이 넘긴 요청의 서명을 확인하고, 대기열에 넣은 뒤 바로 응답합니다. 분석과 수정은 수십 초에서 몇 분이 걸려서 **워커**가 따로 실행합니다.
+- **워커**는 결과 글을 n8n으로 보냅니다. "분석 중…"처럼 몇 초마다 고쳐 쓰다가 지우는 진행 표시만 Slack에 직접 올립니다. n8n이 멈춰 있으면 결과 글도 직접 올려서 사람에게는 반드시 닿게 합니다.
 - Slack 서명은 받은 본문의 원본으로만 확인할 수 있어서, n8n은 Slack 요청을 풀지 않은 원본 그대로 넘깁니다.
 - **Postgres**에는 코드 청크, 콜 그래프, 문서, 장애 기록, 작업 상태가 들어갑니다. 원본 코드는 Git에 있고 DB는 검색용 사본입니다.
 - **Redis**는 대기열과 코드 캐시로 씁니다.
@@ -104,6 +109,8 @@ RoomPage.jsx#loadRoom → GET /api/v1/rooms/{} → RoomController#getRoom → Ro
 5. **Slack 앱**을 `slack/manifest.example.yml`로 만들고 Bot Token과 Signing Secret을 `.env`에 넣습니다.
 6. n8n 워크플로를 넣습니다.
    ```bash
+   # Slack에 글을 올릴 토큰과 내부 요청 확인 값을 .env 에서 읽어 n8n의 암호화 저장소에 넣는다
+   python3 scripts/n8n_credentials.py .env | docker compose exec -T n8n sh -c 'cat > /tmp/c.json && n8n import:credentials --input=/tmp/c.json; rm -f /tmp/c.json'
    docker compose exec n8n n8n import:workflow --input=/files/inboundGateway01.json
    docker compose exec n8n n8n publish:workflow --id=inboundGateway01
    docker compose restart n8n

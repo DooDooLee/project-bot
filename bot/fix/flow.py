@@ -347,7 +347,7 @@ async def run(ctx, job_id: int) -> None:
             jobs.update_job(conn, job_id, "fix_failed", fix={"branch": branch, "history": history, "usage": usage.as_dict()})
         await progress.done("*AI 수정 실패*", "failed")
         text, blocks = slack_ui.fix_failed_message(job_id, MAX_ATTEMPTS, branch)
-        await slack_client.post_message(channel, text, thread_ts=thread, blocks=blocks)
+        await slack_client.post_message(channel, text, thread_ts=thread, blocks=blocks, kind="fix_failed")
     except Exception as e:
         log.exception("fix failed job=%s", job_id)
         with store.connect() as conn:
@@ -390,4 +390,4 @@ async def finish(ctx, job, project, root, branch, fix, changed, history, usage, 
         "elapsed": elapsed, "attempts": attempts, "before": before_number, "after": build_number,
         "changed": changed, "apis": apis, "pr_url": pr_url, "branch": branch,
     })
-    await slack_client.post_message(job["slack_channel"], text, thread_ts=job["slack_ts"], blocks=blocks)
+    await slack_client.post_message(job["slack_channel"], text, thread_ts=job["slack_ts"], blocks=blocks, kind="fix")

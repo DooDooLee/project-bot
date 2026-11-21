@@ -16,6 +16,10 @@ import urllib.parse
 import urllib.request
 
 BASE = os.environ.get("GATEWAY_URL", "http://n8n:5678/webhook")
+# Slack 앱에 등록된 주소는 두 개지만 n8n의 Slack 상자는 하나다. 바깥 주소로 시험할 때는 Caddy가 둘을 하나로 모아 준다
+OUTSIDE = "GATEWAY_URL" in os.environ
+EVENTS = "/slack/events" if OUTSIDE else "/slack"
+ACTIONS = "/slack/actions" if OUTSIDE else "/slack"
 SIGNING = os.environ.get("SLACK_SIGNING_SECRET", "")
 HOOK = os.environ.get("WEBHOOK_SECRET", "")
 failed = 0
@@ -52,39 +56,39 @@ FORM = "application/x-www-form-urlencoded"
 
 # ── Slack: 봇을 부름 ──
 body = json.dumps({"type": "url_verification", "challenge": "abc123"}).encode()
-check("주소 확인 요청에는 n8n이 바로 답한다", send("/slack/events", body, {"content-type": JSON}), 200, {"challenge": "abc123"})
+check("주소 확인 요청에는 n8n이 바로 답한다", send(EVENTS,body, {"content-type": JSON}), 200, {"challenge": "abc123"})
 
 mention = {"type": "event_callback", "event": {"type": "app_mention", "channel": "C0000000000", "ts": "1.0", "user": "U0", "text": "<@U0BOT>"}}
 # 한글과 특수 문자가 섞여도 원본 그대로 넘어가야 서명이 맞는다
 mention["event"]["text"] = "<@U0BOT>"
 body = json.dumps(mention, ensure_ascii=False).encode()
-check("봇을 부르면 서명이 유지된 채 봇 API까지 간다", send("/slack/events", body, slack_headers(body, JSON)), 200, {"ok": True, "ignored": None})
-check("서명이 틀리면 봇 API가 거절하고 그 답이 그대로 돌아온다", send("/slack/events", body, slack_headers(body, JSON, secret="wrong")), 401, {"detail": "invalid slack signature"})
-check("Slack이 다시 보낸 요청은 n8n이 버린다", send("/slack/events", body, slack_headers(body, JSON, **{"x-slack-retry-num": "1"})), 200, {"ignored": True})
+check("봇을 부르면 서명이 유지된 채 봇 API까지 간다", send(EVENTS,body, slack_headers(body, JSON)), 200, {"ok": True, "ignored": None})
+check("서명이 틀리면 봇 API가 거절하고 그 답이 그대로 돌아온다", send(EVENTS,body, slack_headers(body, JSON, secret="wrong")), 401, {"detail": "invalid slack signature"})
+check("Slack이 다시 보낸 요청은 n8n이 버린다", send(EVENTS,body, slack_headers(body, JSON, **{"x-slack-retry-num": "1"})), 200, {"ignored": True})
 
 own = json.loads(json.dumps(mention))
 own["event"]["bot_id"] = "B1"
 body = json.dumps(own).encode()
-check("봇 자신이 쓴 글은 n8n이 버린다", send("/slack/events", body, slack_headers(body, JSON)), 200, {"ignored": True})
+check("봇 자신이 쓴 글은 n8n이 버린다", send(EVENTS,body, slack_headers(body, JSON)), 200, {"ignored": True})
 
 other = {"type": "event_callback", "event": {"type": "reaction_added", "user": "U0"}}
 body = json.dumps(other).encode()
-check("멘션이 아닌 이벤트는 n8n이 버린다", send("/slack/events", body, slack_headers(body, JSON)), 200, {"ignored": True})
+check("멘션이 아닌 이벤트는 n8n이 버린다", send(EVENTS,body, slack_headers(body, JSON)), 200, {"ignored": True})
 
 # ── Slack: 버튼을 누름 ── (값이 숫자가 아니면 워커가 아무것도 하지 않는다)
 payload = {"type": "block_actions", "user": {"id": "U0"}, "channel": {"id": "C0000000000"},
            "message": {"ts": "1.0", "text": "한글 + 기호 & = % / 포함", "blocks": []},
            "actions": [{"action_id": "show_evidence", "value": "시험", "type": "button"}]}
 body = urllib.parse.urlencode({"payload": json.dumps(payload, ensure_ascii=False)}).encode()
-check("버튼 누름은 서명이 유지된 채 봇 API까지 간다", send("/slack/actions", body, slack_headers(body, FORM)), 200, {"ok": True, "ignored": None})
+check("버튼 누름은 서명이 유지된 채 봇 API까지 간다", send(ACTIONS,body, slack_headers(body, FORM)), 200, {"ok": True, "ignored": None})
 # Slack이 실제로 보내는 모양(공백 없는 JSON)도 확인한다
 compact = urllib.parse.urlencode({"payload": json.dumps(payload, ensure_ascii=False, separators=(",", ":"))}).encode()
-check("공백 없는 JSON으로 온 버튼 누름도 봇 API까지 간다", send("/slack/actions", compact, slack_headers(compact, FORM)), 200, {"ok": True, "ignored": None})
-check("버튼 요청도 서명이 틀리면 거절된다", send("/slack/actions", body, slack_headers(body, FORM, secret="wrong")), 401, {"detail": "invalid slack signature"})
+check("공백 없는 JSON으로 온 버튼 누름도 봇 API까지 간다", send(ACTIONS,compact, slack_headers(compact, FORM)), 200, {"ok": True, "ignored": None})
+check("버튼 요청도 서명이 틀리면 거절된다", send(ACTIONS,body, slack_headers(body, FORM, secret="wrong")), 401, {"detail": "invalid slack signature"})
 
 view = dict(payload, type="view_submission")
 body = urllib.parse.urlencode({"payload": json.dumps(view)}).encode()
-check("버튼 누름이 아닌 상호작용은 n8n이 버린다", send("/slack/actions", body, slack_headers(body, FORM)), 200, {"ignored": True})
+check("버튼 누름이 아닌 상호작용은 n8n이 버린다", send(ACTIONS,body, slack_headers(body, FORM)), 200, {"ignored": True})
 
 # ── Jenkins: 배포 알림 ──
 body = json.dumps({"status": "PING", "build_number": 0}).encode()

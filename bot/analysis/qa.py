@@ -278,7 +278,7 @@ async def answer(ctx, job_id: int, intent: str | None = None, question: str | No
             await slack_client.post_message(channel, OUT_OF_SCOPE, thread_ts=thread)
             return
         used: list[str] = []
-        status = await slack_client.post_message(channel, "*확인 중…*", thread_ts=thread)
+        status = await slack_client.post_message(channel, "*확인 중…*", thread_ts=thread, transient=True)
 
         async def on_tool(name: str, args: dict) -> None:
             used.append(name)
@@ -307,7 +307,7 @@ async def answer(ctx, job_id: int, intent: str | None = None, question: str | No
             # 진행 메시지는 지우고 답 하나만 남긴다
             await slack_client.delete_message(channel, status["ts"])
         shown, blocks = slack_ui.answer_message(text, elapsed, names)
-        await slack_client.post_message(channel, shown, thread_ts=thread, blocks=blocks)
+        await slack_client.post_message(channel, shown, thread_ts=thread, blocks=blocks, kind="answer")
     except Exception as e:
         log.exception("qa failed job=%s", job_id)
         text, blocks = slack_ui.problem_message("답변", e)
