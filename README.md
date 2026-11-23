@@ -15,29 +15,7 @@ Slack에 에러를 붙여 넣으면 원인을 분석하고, 코드 문제면 고
 
 ## 구조
 
-```mermaid
-flowchart LR
-    Slack --> Caddy
-    GitHub -- PR merge --> Caddy
-    subgraph 봇 서버
-        Caddy --> n8n[n8n · 봇의 문] --> API[FastAPI]
-        API --> Q[(Redis 대기열)] --> W[워커 · LangGraph]
-        W -- 결과 --> n8n
-        W --> PG[(Postgres · pgvector)]
-        W --> Q
-        W --> Loki
-        W --> Prom[Prometheus]
-    end
-    subgraph 앱 서버
-        App[서비스 컨테이너] --> Alloy --> Loki
-        Exp[exporter] --> Prom
-        Jenkins -- 배포 알림 --> Caddy
-    end
-    n8n -- 결과 글 --> Slack
-    W --> Claude[Claude API]
-    W --> GitHub
-    W --> Jenkins
-```
+![프로젝트 봇 시스템 구조](docs/architecture.png)
 
 - **n8n**은 봇의 문입니다. 워크플로 하나에 줄이 두 개 있습니다.
   - **받는 줄**: 바깥에서 오는 알림(Slack, Jenkins, GitHub)을 받아, 나누기 상자 하나에서 종류를 가립니다. 쓸모없는 알림(Slack의 재전송, 봇 자신이 쓴 글, merge가 아닌 PR 알림 등)은 버리고, 나머지는 종류에 맞는 API 주소로 넘깁니다.
